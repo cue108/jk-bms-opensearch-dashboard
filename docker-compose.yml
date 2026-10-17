@@ -8,7 +8,7 @@ name: jk-bms
 
 services:
   opensearch:
-    image: opensearchproject/opensearch:2.17.1
+    image: opensearchproject/opensearch:3.7.0
     container_name: jkbms-opensearch
     environment:
       - discovery.type=single-node
