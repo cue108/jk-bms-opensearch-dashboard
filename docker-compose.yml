@@ -41,16 +41,18 @@ services:
         condition: service_healthy
     environment:
       - OS=http://opensearch:9200
+      - INDEX_PREFIX=${INDEX_PREFIX:-jkbms}
     volumes:
       - ./opensearch-config:/cfg:ro
     restart: "no"
     entrypoint: ["/bin/sh", "-c"]
     command:
       - >-
-        curl -fsS -X PUT "$$OS/_index_template/jkbms"
+        sed "s/%INDEX_PREFIX%/$$INDEX_PREFIX/g" /cfg/index-template.json
+        | curl -fsS -X PUT "$$OS/_index_template/jkbms"
         -H 'Content-Type: application/json'
-        --data-binary @/cfg/index-template.json
-        && echo " index template installed"
+        --data-binary @-
+        && echo " index template installed for $$INDEX_PREFIX-*"
 
   collector:
     build: ./backend
