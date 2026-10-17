@@ -55,6 +55,12 @@ and a vendored copy of [uPlot](https://github.com/leeoniya/uPlot).
 |---|---|
 | ![status](docs/screenshots/status-live.png) | ![history](docs/screenshots/history-synced-crosshair.png) |
 
+## Live demo
+
+**https://bms.cue4net.com/** — a real production instance of this exact stack
+(same code, same containers). Like everything here it is strictly read-only:
+you can browse the live status and the full history; nothing can be changed.
+
 ## Tested hardware
 
 First verified on (and running daily ever since):
