@@ -1,5 +1,10 @@
 # jk-bms-opensearch-dashboard
 
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![Docker Compose](https://img.shields.io/badge/docker--compose-v2-blue)
+![OpenSearch](https://img.shields.io/badge/OpenSearch-3.7-orange)
+
 **Read-only Bluetooth monitoring for JK BMS battery monitors** — a lean stack
 that streams your battery into [OpenSearch](https://opensearch.org/) and serves
 a self-contained web UI: live status page + history charts with a crosshair
@@ -50,10 +55,26 @@ and a vendored copy of [uPlot](https://github.com/leeoniya/uPlot).
 |---|---|
 | ![status](docs/screenshots/status-live.png) | ![history](docs/screenshots/history-synced-crosshair.png) |
 
+## Tested hardware
+
+First verified on (and running daily ever since):
+
+- **BMS:** JK-BMS **`JK_B2A8S20P`** — 8-slot board, 4s pack configured
+  (hw `11.XW` / fw `11.287`). The protocol layer targets the common JK frame
+  format shared across the JK-B2A/B1A family, so other variants should work.
+- **Bluetooth:** on-board laptop adapter (Dell Precision M6600), plain BlueZ —
+  no USB dongles, no ESP32 proxies.
+- **Host:** Ubuntu 25.04, Docker Compose v2.37, distro BlueZ.
+- **Uptime:** continuous ~1 Hz polling, read-only, multi-day runs across
+  collector restarts and one full production migration.
+
+Running a different model or adapter (USB dongles, ESP32 BLE proxies, other
+hosts)? PRs with test reports are very welcome.
+
 ## Quickstart (Docker Compose)
 
 ```bash
-git clone <this-repo> && cd jk-bms-opensearch-dashboard
+git clone https://github.com/cue108/jk-bms-opensearch-dashboard.git && cd jk-bms-opensearch-dashboard
 cp .env.example .env
 # edit .env: set JK_BMS_MAC (your BMS Bluetooth MAC), DEVICE_NAME, timezones
 docker compose up -d
@@ -175,3 +196,8 @@ curl -s "localhost:9200/jkbms-*/_search?size=1&sort=@timestamp:desc" | jq .
 ## License
 
 [MIT](LICENSE) — free to use, modify, and redistribute.
+
+---
+
+*If this project helps you keep an eye on your battery — consider giving it a
+**⭐️**. It is the cheapest way to help others find it.*
