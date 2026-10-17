@@ -69,9 +69,10 @@ Find your BMS MAC with `bluetoothctl scan on` (or the JK app / any BLE scanner).
 - Linux host with BlueZ running (`systemctl status bluetooth`) and a BLE
   adapter within range of the BMS
 - Docker + Docker Compose v2
-- **Bluetooth inside Docker works out of the box** — the collector only mounts
-  the host's D-Bus socket; no `privileged`, no host networking. Full
-  explanation + troubleshooting: **[docs/bluetooth.md](docs/bluetooth.md)**
+- **Bluetooth inside Docker works out of the box** — the collector mounts the
+  host's D-Bus socket and carries the one `security_opt` line Ubuntu needs
+  (its AppArmor docker-default profile blocks D-Bus); no `privileged`, no host
+  networking. Full explanation + troubleshooting: **[docs/bluetooth.md](docs/bluetooth.md)**
 - The JK BMS allows **one central at a time**: while the collector is connected
   the phone app cannot connect (and vice versa)
 

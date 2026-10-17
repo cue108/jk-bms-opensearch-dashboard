@@ -29,7 +29,27 @@ collector:
     - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
 ```
 
-That single bind-mount is the entire BLE integration:
+That — plus one `security_opt` line — is the entire BLE integration:
+
+```yaml
+security_opt:
+  - apparmor=unconfined
+```
+
+**Why AppArmor?** Ubuntu ships an AppArmor profile for Docker
+(`docker-default`) that blocks D-Bus method calls from containers, which
+kills bleak before it can even start scanning:
+
+```
+BleakDBusError: [org.freedesktop.DBus.Error.AccessDenied]
+An AppArmor policy prevents this sender from sending this message
+to this recipient; … member="AddMatch" …
+```
+
+Setting `apparmor=unconfined` for this one service is the standard fix; on
+distros without that profile it is a no-op. Trade-off, stated honestly: this
+container runs without AppArmor confinement (namespace/mount isolation
+remain) — it runs the code of this repo, nothing else.
 
 - ✅ no `privileged: true`
 - ✅ no `network_mode: host`
@@ -59,7 +79,7 @@ collector just needs the MAC (`JK_BMS_MAC`).
 |---|---|
 | `waiting (BMS not advertising…)` | normal: the phone app (or a previous run) holds the link — close the app and wait |
 | D-Bus / `No such file or directory` on `/run/dbus/system_bus_socket` | host has no system bus at that path (rare custom dbus setups) — check `ls -l /run/dbus/`, or run the native (non-Docker) install |
-| `org.freedesktop.DBus.Error.AccessDenied` | unusual polkit hardening; run the native install as a systemd service, or relax the polkit rule for bluetoothd access |
+| `org.freedesktop.DBus.Error.AccessDenied` + `AppArmor policy` | the shipped compose already sets `apparmor=unconfined` — if you removed `security_opt`, restore it (see above) |
 | scan finds nothing | adapter range/antenna — BLE range to a metal battery box is often the real issue; USB extension cables help |
 
 ### Verifying BLE works inside the container
@@ -87,8 +107,9 @@ collector:
 
 Host networking is *not* needed for BLE itself — D-Bus is a Unix socket — but
 it sidesteps exotic setups where policy checks depend on the network
-namespace. Try the default first; it has been verified end-to-end against a
-real JK BMS (scan → connect → ~1 Hz frames → indexed documents).
+namespace. Try the default first; it has been verified end-to-end on
+Ubuntu 25.04 (2026-10-17): D-Bus mount + `apparmor=unconfined` → scan →
+connect → ~1 Hz frames → per-minute indexed documents → charts.
 
 ## Single-central caveat
 
