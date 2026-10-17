@@ -1,0 +1,30 @@
+{
+  "index_patterns": ["jkbms-*"],
+  "priority": 100,
+  "template": {
+    "settings": {
+      "number_of_shards": 1,
+      "number_of_replicas": 0
+    },
+    "mappings": {
+      "properties": {
+        "@timestamp": { "type": "date" },
+        "stale": { "type": "boolean" },
+        "streaming": { "type": "boolean" },
+        "frames_total": { "type": "long" },
+        "frames_cell_info": { "type": "long" }
+      },
+      "dynamic_templates": [
+        {
+          "strings_as_keywords": {
+            "match_mapping_type": "string",
+            "mapping": {
+              "type": "keyword",
+              "ignore_above": 1024
+            }
+          }
+        }
+      ]
+    }
+  }
+}

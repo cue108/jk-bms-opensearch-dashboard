@@ -1,0 +1,2 @@
+# No third-party dependencies — Python standard library only.
+# The chart library (uPlot, MIT) is vendored in web/.

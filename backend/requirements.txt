@@ -1,0 +1,2 @@
+# BLE client (pulls dbus-next for the Linux/BlueZ backend)
+bleak>=0.21

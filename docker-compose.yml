@@ -1,0 +1,95 @@
+# JK BMS → OpenSearch stack. Start with:  cp .env.example .env && docker compose up -d
+#
+# Bluetooth: the collector mounts the HOST D-Bus socket so bleak can talk to
+# the host's BlueZ daemon (bluez + bluetoothd must be running on the host).
+# No privileged mode, no host networking — see docs/bluetooth.md.
+
+name: jk-bms
+
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2.17.1
+    container_name: jkbms-opensearch
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=false
+      # Security plugin disabled for a LAN-only stack (default port 9200).
+      # NEVER expose an unauthenticated OpenSearch to the internet — see
+      # docs/security.md before changing anything here.
+      - DISABLE_SECURITY_PLUGIN=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock: { soft: -1, hard: -1 }
+    volumes:
+      - opensearch-data:/usr/share/opensearch/data
+    ports:
+      - "${OS_PORT:-9200}:9200"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
+  # One-shot: installs the jkbms index template (idempotent)
+  opensearch-init:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      opensearch:
+        condition: service_healthy
+    environment:
+      - OS=http://opensearch:9200
+    volumes:
+      - ./opensearch-config:/cfg:ro
+    restart: "no"
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - >-
+        curl -fsS -X PUT "$$OS/_index_template/jkbms"
+        -H 'Content-Type: application/json'
+        --data-binary @/cfg/index-template.json
+        && echo " index template installed"
+
+  collector:
+    build: ./backend
+    container_name: jkbms-collector
+    depends_on:
+      opensearch:
+        condition: service_healthy
+      opensearch-init:
+        condition: service_completed_successfully
+    environment:
+      - JK_BMS_MAC=${JK_BMS_MAC:?set JK_BMS_MAC in .env (Bluetooth MAC of your BMS)}
+      - HTTP_PORT=8099
+      - OPENSEARCH_URL=http://opensearch:9200
+      - INDEX_PREFIX=${INDEX_PREFIX:-jkbms}
+      - INDEX_TZ=${INDEX_TZ:-UTC}
+    volumes:
+      # the whole trick for BLE-in-Docker: talk to the host's bluetoothd
+      - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
+    ports:
+      - "${BACKEND_PORT:-8099}:8099"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8099/api/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build: ./frontend
+    container_name: jkbms-web
+    depends_on:
+      - collector
+    environment:
+      - OPENSEARCH_URL=http://opensearch:9200
+      - INDEX=${INDEX_PREFIX:-jkbms}-*
+      - CHARTS_TZ=${CHARTS_TZ:-UTC}
+      - DEVICE_NAME=${DEVICE_NAME:-JK BMS}
+      - BACKEND_URL=http://collector:8099
+      - WEB_PORT=8098
+    ports:
+      - "${WEB_PORT:-8098}:8098"
+    restart: unless-stopped
+
+volumes:
+  opensearch-data:

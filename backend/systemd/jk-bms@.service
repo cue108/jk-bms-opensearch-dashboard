@@ -1,0 +1,35 @@
+# Native (non-Docker) install example for the collector.
+# Prereqs: python3.10+, bluez running, and:  pip install bleak
+#
+#   sudo cp jk-bms.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now jk-bms.service
+#
+# Set JK_BMS_MAC etc. via Environment= lines below or EnvironmentFile=.
+
+[Unit]
+Description=JK BMS read-only collector (BLE -> OpenSearch)
+After=bluetooth.service network-online.target
+Wants=bluetooth.service
+
+[Service]
+Type=simple
+User=%i
+# NOTE: needs D-Bus access for BlueZ. Easiest with the system bus reachable:
+# stock Ubuntu/Debian with bluetoothd running works for members of group
+# `bluetooth` — add your user:  sudo usermod -aG bluetooth %i
+Environment=JK_BMS_MAC=AA:BB:CC:DD:EE:FF
+Environment=OPENSEARCH_URL=http://127.0.0.1:9200
+Environment=INDEX_PREFIX=jkbms
+WorkingDirectory=/opt/jk-bms/backend
+ExecStart=/usr/bin/python3 -u collector.py
+Restart=on-failure
+RestartSec=5
+
+# graceful BLE shutdown: SIGTERM lets the client close the LE link cleanly
+# (a killed-while-connected client can leave an orphaned kernel connection)
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+[Install]
+WantedBy=multi-user.target
