@@ -66,6 +66,11 @@ services:
     volumes:
       # the whole trick for BLE-in-Docker: talk to the host's bluetoothd
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
+    security_opt:
+      # Ubuntu's AppArmor "docker-default" profile blocks D-Bus method calls,
+      # which bleak needs for scan/connect (verified on Ubuntu 25.04 — see
+      # docs/bluetooth.md). Harmless on distros without that profile.
+      - apparmor=unconfined
     ports:
       - "${BACKEND_PORT:-8099}:8099"
     restart: unless-stopped
