@@ -1,5 +1,5 @@
 {
-  "index_patterns": ["jkbms-*"],
+  "index_patterns": ["%INDEX_PREFIX%-*"],
   "priority": 100,
   "template": {
     "settings": {
