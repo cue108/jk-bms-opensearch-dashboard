@@ -30,9 +30,12 @@ services:
       timeout: 5s
       retries: 30
 
-  # One-shot: installs the jkbms index template (idempotent)
+  # One-shot: installs the index template (idempotent)
   opensearch-init:
     image: curlimages/curl:8.10.1
+    # run as root so world-readable template files suffice even on hosts
+    # with restrictive umask (tar/scp home dirs often land on 0600)
+    user: "0:0"
     depends_on:
       opensearch:
         condition: service_healthy
