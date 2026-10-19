@@ -63,13 +63,15 @@ you can browse the live status and the full history; nothing can be changed.
 
 ## Tested hardware
 
-First verified on (and running daily ever since):
+Verified and running daily on the deployment server (an always-on desktop
+tower — mainboard MSI MS-7885):
 
 - **BMS:** JK-BMS **`JK_B2A8S20P`** — 8-slot board, 4s pack configured
   (hw `11.XW` / fw `11.287`). The protocol layer targets the common JK frame
   format shared across the JK-B2A/B1A family, so other variants should work.
-- **Bluetooth:** on-board laptop adapter (Dell Precision M6600), plain BlueZ —
-  no USB dongles, no ESP32 proxies.
+- **Bluetooth:** plain BlueZ (`hci0`) against a USB Bluetooth radio
+  (Realtek RTL8771, `btusb`) in a chassis USB port of that server — direct
+  adapter access, no ESP32/BLE-proxy chains.
 - **Host:** Ubuntu 25.04, Docker Compose v2.37, distro BlueZ.
 - **Uptime:** continuous ~1 Hz polling, read-only, multi-day runs across
   collector restarts and one full production migration.
