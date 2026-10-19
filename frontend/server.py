@@ -205,12 +205,15 @@ function makeCharts() {
   charts = [];
   for (const p of PANELS) {
     document.getElementById("lg-" + p.id).innerHTML = legendHTML(p);
+    const AXFG = "#adbac7";   // Tick-Werte: heller Kontrast auf dunklem Grund
     const axes = [
-      {stroke:"#8b949e", grid:{stroke:"#21262d"}, ticks:{stroke:"#30363d"},
-       labelColor:"#8b949e", font:"11px sans-serif",
-       values: (u, ticks) => ticks.map(v => fmtT(v, data.range_ms))}];
+      {stroke:AXFG, grid:{stroke:"#21262d"}, ticks:{stroke:"#30363d"},
+       labelColor:AXFG, font:"11px sans-serif",
+       values: (u, ticks) => ticks.map(v => fmtT(v, data.range_ms))},
+      {scale:"y", stroke:AXFG, grid:{stroke:"#21262d"}, ticks:{stroke:"#30363d"},
+       labelColor:AXFG, font:"11px sans-serif"}];
     if (p.dual) axes.push({scale:"v2", side:1, stroke:"#ff7b45",
-      grid:{show:false}, ticks:{show:false}, labelColor:"#8b949e",
+      grid:{show:false}, ticks:{show:false}, labelColor:"#ff7b45",
       font:"11px sans-serif"});
     const yRange = (u, min, max) => {
       const pad = (max - min) * 0.08 || Math.abs(max) * 0.05 || 0.1;
@@ -246,10 +249,20 @@ function makeCharts() {
     u.over.addEventListener("pointerenter", () => hovering = true);
     u.over.addEventListener("pointerleave", () => {
       hovering = false; p.tt_hide && p.tt_hide(); });
+    // Robustes Resize: die KARTE selbst beobachten (deckt Fensterziehen, Zoom
+    // und Layout-Umbrueche ab), feste Panel-Hoehe mitgeben, Messwerte <40px
+    // (Zwischenwerte waehrend des Ziehens) ignorieren, Zeichnen auf rAF legen.
+    // Der Initial-Callback des Observers korrigiert zudem einen zur Seit-
+    // ladung falsch gemessenen Anfangsbreiten-Wert.
+    const ph = p.wide ? 260 : 200;
+    let raf = 0;
+    new ResizeObserver(entries => {
+      const w = Math.round(entries[0].contentRect.width);
+      if (w < 40) return;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => u.setSize({width: w, height: ph}));
+    }).observe(el);
   }
-  window.addEventListener("resize", () => {
-    for (const c of charts) c.u.setSize({width: c.el.clientWidth});
-  });
 }
 
 function attachTips() {
