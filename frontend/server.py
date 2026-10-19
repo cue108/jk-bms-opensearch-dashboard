@@ -115,7 +115,8 @@ HISTORY_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   .ranges button { background:#21262d; color:#c9d1d9; border:1px solid #30363d;
                    border-radius:6px; padding:4px 12px; cursor:pointer; font-weight:600; }
   .ranges button.on { background:#1f6feb; border-color:#1f6feb; color:#fff; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; padding:12px 20px 40px; }
+  .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; padding:12px 20px 40px; }
+  .grid .card { min-width:0; }   /* Grid-Item darf unter Canvas-Inhalt schrumpfen — sonst kein Resize-Runter-Pfad */
   .card { background:#161b22; border:1px solid #30363d; border-radius:8px;
           padding:10px 12px 6px; position:relative; }
   .card.wide { grid-column:1 / -1; }
@@ -126,6 +127,7 @@ HISTORY_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   .legend b { color:#e6edf3; font-weight:600; margin-left:4px; }
   .legend i { width:9px; height:9px; border-radius:2px; display:inline-block; }
   .uplot, .u-wrap { width:100%; }
+  .uplot canvas { max-width:100%; }   /* Schutznetz: nie breiter als die Karte (verhindert Scrollbalken bis setSize greift) */
   .tt { position:absolute; pointer-events:none; background:rgba(22,27,34,.96);
         border:1px solid #30363d; border-radius:6px; padding:6px 10px;
         font-size:12px; z-index:3; display:none; min-width:170px; }
@@ -342,6 +344,7 @@ h1{font-size:20px;font-weight:600} h1 small{color:var(--dim);font-weight:400;fon
 .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
 .pill.live{background:#1a3a1f;color:var(--green)} .pill.stale{background:#3a2a1a;color:var(--orange)}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-bottom:12px}
+.grid>.card{min-width:0}   /* gleicher Schrumpf-Boden wie History-Block */
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
 .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:10px}
 .hero{display:flex;gap:26px;flex-wrap:wrap;align-items:baseline}
