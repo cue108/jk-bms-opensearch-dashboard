@@ -1,0 +1,6 @@
+{
+  "_readme": "Switch identity for the switchlink tests: ONE place instead of hardcoded values in the test code (owner ruling 2026-11-04: tests configurable too). The IP and device id are the operator's real values, kept as a WORKED EXAMPLE for anyone using this repo — copy the shape and put YOUR switch's data here. The device key is a placeholder; the real key never leaves the operator's own .env.",
+  "SW_MAIN_IP": "192.168.0.56",
+  "SW_MAIN_DEVICEID": "10002c3ae3",
+  "SW_MAIN_DEVICEKEY": "aa11bb22-cc33-dd44-ee55-ff6677889900"
+}

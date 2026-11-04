@@ -107,9 +107,9 @@ collector:
 
 Host networking is *not* needed for BLE itself — D-Bus is a Unix socket — but
 it sidesteps exotic setups where policy checks depend on the network
-namespace. Try the default first; it has been verified end-to-end on
-Ubuntu 25.04 (2026-10-17): D-Bus mount + `apparmor=unconfined` → scan →
-connect → ~1 Hz frames → per-minute indexed documents → charts.
+namespace. Try the default first; it has been verified end-to-end: D-Bus
+mount + `apparmor=unconfined` → scan → connect → ~1 Hz frames → per-minute
+indexed documents → charts.
 
 ## Single-central caveat
 

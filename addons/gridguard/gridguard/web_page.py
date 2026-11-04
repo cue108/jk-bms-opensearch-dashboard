@@ -1,0 +1,758 @@
+"""Energie Management page (verbatim move + one sanctioned fetch rewrite)."""
+PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>JK-BMS · %DEVICE% · Energie Management</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:#0d1117; color:#e6edf3;
+         font:14px/1.45 -apple-system,Segoe UI,Roboto,sans-serif; }
+  header { display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+           padding:10px 16px; background:#161b22; border-bottom:1px solid #30363d; }
+  header h1 { font-size:15px; margin:0; font-weight:600; }
+  .pill { border-radius:10px; font-size:11px; padding:3px 10px; font-weight:700;
+          letter-spacing:.4px; }
+  .pill.live { background:#238636; color:#fff; }
+  .pill.stale { background:#9e6a03; color:#fff; }
+  .pill.dead { background:#da3633; color:#fff; }
+  .badge { background:#1f6feb; color:#fff; border-radius:8px; font-size:11px;
+           padding:2px 8px; font-weight:700; }
+  .badge.dry { background:#6e7681; }
+  .meta { color:#8b949e; font-size:12px; }
+  .card .hero-state { font-size:40px; text-shadow:none; }
+  /* planned-action time on the Actor-plan card (owner redesign): hero-size,
+     amber = the ON color while armed, neutral before the eve decides */
+  .ap-time { font-size:34px; font-weight:800; line-height:1.15;
+             font-variant-numeric:tabular-nums; margin-top:2px; }
+  .ap-time.on { color:#d29922; }
+  .card .hero-sub { font-size:13.5px; }
+  .bat-big { font-size:40px; font-weight:800; color:#8957e5;
+             font-variant-numeric:tabular-nums; line-height:1.1; }
+  .bat-line { color:#8b949e; font-size:12.5px; margin-top:3px;
+              font-variant-numeric:tabular-nums; }
+  /* Floor = content-safe width (owner ruling2026-10-21: cards MUST wrap to
+     the next row BEFORE any card overflows — the weather table alone needs
+     ~235px CONTENT, i.e. ~290px card). Five-across only where there is
+     genuinely room (≥ ~1500px viewport); narrower → clean wrap, never squeeze. */
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(290px,1fr));
+           gap:12px; padding:14px 16px; }
+  .card { background:#161b22; border:1px solid #30363d; border-radius:10px;
+          padding:12px 14px; min-width:0; }
+  .card h2 { font-size:12px; margin:0 0 8px; color:#8b949e; text-transform:uppercase;
+             letter-spacing:.8px; font-weight:700; }
+  .wide { grid-column:1/-1; }
+  /* plan card ABOVE the decision trail, BOTH full width (owner layout ruling
+     2026-10-22: the narrow 340px rail squeezed the long value texts into an
+     unreadable rag — both cards now carry long prose and read on single
+     lines at full width; stacks identically on narrow screens) */
+  .cards.duo { grid-template-columns:1fr; }
+  @media (max-width:700px) { .cards.duo { grid-template-columns:1fr; } }
+  /* owner layout revision (2026-10-26): the ACTOR PLAN sits one row UP, LEFT
+     of the forecast → decision influence card — the pair owns a FLEX row of
+     its own directly below the top four-card grid (Grid · Battery · Energy ·
+     Weather keep row 1 alone at EVERY viewport — no auto-fit 5th cell can
+     pull the plan up). Plan = one-card width (the 290px minmax cell,
+     mirrored at four-across widths), influence = the REMAINING width
+     (flex-basis 0, so it can never wrap the line — its .wide full-span is
+     dropped with this move); both stack full-width below 700px, like
+     .cards.duo. Side-only padding keeps the 12-14px row cadence intact */
+  .cards-planrow { display:flex; flex-wrap:wrap; gap:12px; padding:0 16px; }
+  .cards-planrow > .card:first-child { flex:0 0 max(290px, calc((100% - 36px) / 4)); }
+  .cards-planrow #infl-card { flex:1 1 0; min-width:0; }
+  @media (max-width:700px) {
+    .cards-planrow > .card:first-child,
+    .cards-planrow > #infl-card { flex:1 1 100%; }
+  }
+  .counts { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .count .v { font-size:23px; font-weight:700; font-variant-numeric:tabular-nums;
+              white-space:nowrap; }
+  .count .r { color:#8b949e; font-size:11.5px; font-variant-numeric:tabular-nums;
+              margin-top:2px; }
+  .count .in-v { color:#3fb950; } .count .out-v { color:#d29922; }
+  .note { color:#8b949e; font-size:11.5px; margin-top:8px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th { text-align:left; color:#8b949e; font-size:11px; text-transform:uppercase;
+       letter-spacing:.6px; padding:4px 6px; border-bottom:1px solid #30363d; }
+  td { padding:5px 6px; border-bottom:1px solid #21262d;
+       font-variant-numeric:tabular-nums; }
+  td.num, th.num { text-align:right; }
+  tr:last-child td { border-bottom:0; }
+  tbody tr:nth-child(even) { background:#ffffff07; }
+  .chip { border-radius:8px; font-size:10.5px; font-weight:700; padding:1px 7px;
+          letter-spacing:.4px; }
+  .chip.in { background:#12261e; color:#3fb950; border:1px solid #23863644; }
+  .chip.out { background:#2b2110; color:#d29922; border:1px solid #9e6a0344; }
+  /* STATE chips (owner color ruling2026-10-22): ON = amber, OFF = green —
+     consistent with the hero; .in/.out stay for the ENERGY semantics */
+  .chip.on { background:#2b2110; color:#d29922; border:1px solid #9e6a0344; }
+  .chip.off { background:#12261e; color:#3fb950; border:1px solid #23863644; }
+  /* owner spec 2026-10-24 (second iteration): the bar lives in its OWN
+     "visual expression" column — TEXT-FREE, segment fills = the pills'
+     bright LETTER colors (amber ON, green OFF, dim grey unlabelled) */
+  .vbar { display:flex; width:100%; min-width:120px; height:14px;
+          border-radius:7px; overflow:hidden; background:#ffffff08;
+          border:1px solid #ffffff10; }
+  .vseg { height:100%; }
+  .vseg.on  { background:#d29922; }
+  .vseg.off { background:#3fb950; }
+  .vseg.unk { background:#8b949e55; }
+  .dim { color:#8b949e; }
+  .sysnote { color:#8b949e; font-size:12px; font-style:italic; margin-top:6px; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:2px 12px; font-size:13px; }
+  .kv .k { color:#8b949e; } .kv .v { text-align:right; font-variant-numeric:tabular-nums; }
+  /* plan + trail cards (owner layout ruling2026-10-22): TWO columns, values
+     LEFT-aligned, every second row shaded CONTINUOUSLY like the page's
+     tables — no column gap (the band must not split into two pieces) */
+  .cards.duo .kv { row-gap:0; column-gap:0; }
+  .cards.duo .kv > .k { padding:5px 14px 5px 8px; }
+  .cards.duo .kv > .v { padding:5px 8px; }
+  .cards.duo .kv .v { text-align:left; }
+  .cards.duo .kv > :nth-child(4n+3),
+  .cards.duo .kv > :nth-child(4n+4) { background:#ffffff07; }
+  .hero { text-align:center; }
+  .hero-state { font-size:58px; font-weight:800; letter-spacing:3px; line-height:1.05; }
+  .hero-state.on { color:#d29922; text-shadow:0 0 28px rgba(210,153,34,.35); }
+  .hero-state.off { color:#3fb950; text-shadow:0 0 28px rgba(63,185,80,.35); }
+  .hero-sub { font-size:15px; color:#e6edf3; margin-top:6px; }
+  .hero-ev { font-size:13px; color:#8b949e; margin-top:4px;
+             font-variant-numeric:tabular-nums; }
+  .hero-next { font-size:13.5px; margin-top:9px; }
+  .hero-next .chip { font-size:12.5px; padding:3px 11px; }
+  #wx-body td:first-child { white-space:nowrap; }
+  /* UPS-mode strip (owner part4 2026-10-26): ONE compact banner line at the
+     top of the weather card — latched reserve mode + WHY + SOC vs the band;
+     hidden entirely when the payload carries no reserve_tier event */
+  .ups-strip { background:#12261e; border:1px solid #23863644;
+               border-left:3px solid #d29922; border-radius:6px;
+               padding:5px 9px; margin-bottom:8px; font-size:12px;
+               color:#c9d1d9; line-height:1.55; overflow-wrap:anywhere; }
+  .ups-strip b { color:#e6edf3; }
+  /* forecast → decision influence table (owner part4): status chips reuse the
+     page's chip vocabulary — active = amber (a hold IS in force), released =
+     green, superseded rows stay plain dim text */
+  .st-active { color:#d29922; font-weight:700; }
+  .st-released { color:#3fb950; font-weight:700; }
+  footer { color:#6e7681; font-size:11px; padding:2px 16px 12px; }
+  button.rf { background:#21262d; color:#e6edf3; border:1px solid #30363d;
+              border-radius:6px; padding:4px 12px; cursor:pointer; font-size:12px; }
+  button.rf:hover { background:#30363d; }
+</style></head><body>
+<header>
+  <h1>Energie Management · %DEVICE%</h1>
+  <span id="pill" class="pill stale">…</span>
+  <span id="mode"></span>
+  <span id="meta" class="meta"></span>
+  <button class="rf" style="margin-left:auto" onclick="load()">Refresh</button>
+</header>
+<div class="cards">
+  <div class="card">
+    <h2>Grid state</h2>
+    <div class="hero-state" id="hero-state">…</div>
+    <div class="hero-sub" id="hero-sub"></div>
+    <div class="hero-ev" id="hero-ev"></div>
+  </div>
+  <div class="card">
+    <h2>Battery capacity</h2>
+    <div class="bat-big" id="bat-kwh">–</div>
+    <div class="bat-line" id="bat-soc"></div>
+    <div class="bat-line" id="bat-formula"></div>
+    <div class="hero-next" id="bat-note"></div>
+  </div>
+  <div class="card">
+    <h2>Energy per period — sum of all values (net)</h2>
+    <div class="counts">
+      <div class="count"><div class="v in-v" id="day-kwh">–</div>
+        <div class="r">Solar day</div><div class="r" id="day-range"></div></div>
+      <div class="count"><div class="v out-v" id="night-kwh">–</div>
+        <div class="r">Night (between solar days)</div><div class="r" id="night-range"></div></div>
+    </div>
+    <div class="note" id="day-window"></div>
+    <div class="note" id="zeroed"></div>
+  </div>
+  <div class="card">
+    <h2>Weather outlook — next days</h2>
+    <div class="ups-strip" id="ups-strip" style="display:none"></div>
+    <table><thead><tr><th>Day</th><th class="num">Forecast kWh/m²</th><th>vs. reference</th></tr></thead>
+      <tbody id="wx-body"><tr><td colspan="3" class="dim">loading…</td></tr></tbody></table>
+    <div class="note" id="wx-learn" style="display:none"></div>
+    <div class="note" id="wx-learn2" style="display:none"></div>
+    <div class="note" id="wx-learn3" style="display:none"></div>
+    <div class="note" id="wx-note"></div>
+  </div>
+</div>
+<!-- owner layout revision (2026-10-26): ACTOR PLAN one row UP — LEFT of the
+     forecast → decision influence card. The pair owns its OWN row directly
+     below the top FOUR-card grid (Grid · Battery · Energy · Weather keep row
+     1 alone at EVERY viewport — never auto-flowed up), plan at one-card
+     width, influence taking the remainder; the plan card travels with ap-wx
+     inside -->
+<div class="cards cards-planrow">
+  <div class="card">
+    <h2>Actor plan — tonight</h2>
+    <div class="hero-state" id="ap-state">…</div>
+    <div class="ap-time" id="ap-time"></div>
+    <div class="note" id="ap-sub"></div>
+    <div class="hero-next" id="ap-off"></div>
+    <div class="note" id="ap-eve"></div>
+    <div class="note" id="ap-wx" style="display:none"></div>
+  </div>
+  <!-- owner part4 (2026-10-26): forecast → decision influence — the reserve-tier
+       decisions the weather outlook drove; hidden WHOLE when no reserve_tier
+       events exist (never an empty frame); RIGHT of the plan card in the row
+       below the top four-card grid — its full-width .wide span is dropped
+       here (the flex row gives it the remaining width instead) -->
+  <div class="card" id="infl-card" style="display:none">
+    <h2>Forecast → decision influence</h2>
+    <table><thead><tr><th>When (local)</th><th>Signal</th><th>Mode</th>
+      <th>Effect</th><th>Status</th></tr></thead>
+      <tbody id="infl-body"></tbody></table>
+  </div>
+</div>
+<div class="cards">
+  <div class="card wide">
+    <h2>Period history — last 8 days</h2>
+    <table><thead><tr><th>Period</th><th>From</th><th>To</th><th>Actor (labelled state)</th><th>Visual expression</th><th class="num">Net kWh</th>
+      <th class="num">Grid-on zeroed kWh</th></tr></thead>
+      <tbody id="hist-body"><tr><td colspan="6" class="dim">no data</td></tr></tbody></table>
+    <div class="note">Grid-on zeroed = discharge readings withheld (known grid-ON only:
+      observed switch or write-confirmed timer fire — the owner rule trusts
+      only labels it KNOWS); under a △ measured (fill-derived) ON boundary
+      nothing is withheld — the raw net stays visible and the cell discloses,
+      kept in the net (<span id="hist-era">labels exist since the first label</span> — empty while the battery shows no
+      negative current under grid; the past days predate the labels). Actor column =
+      the labelled state from ONE timeline: switch acts + observation journal +
+      write-confirmed timer programs (the last of which fires across the WiFi
+      blackout) + the measured first-positive step inside an unobserved switch
+      gap — plan ideals appear as labelled markers, never as state —
+      "unlabelled" before the first label (never inferred)</div>
+  </div>
+</div>
+<div class="cards">
+  <div class="card wide">
+    <h2>Decision log</h2>
+    <table><thead><tr><th>When</th><th>Event</th><th>Detail</th></tr></thead>
+      <tbody id="dec-body"><tr><td colspan="3" class="dim">no data</td></tr></tbody></table>
+  </div>
+</div>
+<div class="cards duo">
+  <div class="card">
+    <h2>Tonight's plan &amp; prognosis</h2>
+    <div class="kv" id="plan-kv"></div>
+    <div class="sysnote" id="plan-note"></div>
+  </div>
+  <div class="card">
+    <h2>Why the grid switched — decision trail (every input: source + window)</h2>
+    <div class="kv" id="dec-kv"></div>
+  </div>
+</div>
+<footer><span id="ft-refresh">auto-refresh</span> · GET /api/gridguard · energy in kWh (PV trade unit) ·
+net current = solar in − load out (grid OFF) · grid ON ⇒ battery out is zero, pure solar intake visible ·
+periods = measured first → last positive input</footer>
+<script>
+const $=id=>document.getElementById(id);
+const pad=n=>String(n).padStart(2,"0");
+function loc(iso){ if(!iso) return "–";
+  const d=new Date(iso); const W=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+  const M=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+  return W[d.getDay()]+" "+d.getDate()+" "+M[d.getMonth()]+", "+pad(d.getHours())+":"+pad(d.getMinutes()); }
+// (removed: a dead kwh() helper that rendered null as "0.00 kWh" — a
+// fabricated figure; every kWh on this page renders payload values with an
+// explicit null guard instead)
+function age(s){ if(s==null) return "–";
+  if(s<90) return s+" s"; if(s<5400) return Math.round(s/60)+" min";
+  return (s/3600).toFixed(1)+" h"; }
+function detail(e){ const i=e.inputs||{}; const bits=[];
+  if(e.event==="manual_override"&&i.from&&i.to) bits.push("HAND ON THE SWITCH: "+i.from+" → "+i.to+" (not GridGuard)");
+  // owner ruling2026-10-23: the MONITOR and all docs are ENGLISH — German
+  // lives only in the conversations (chat + the phone push doctrine)
+  if(e.event==="act"){ const t=(e.action||{}).type||"act";
+    const TA={ensure_on:"return-timer written + verified on device",
+              noop:"program already on device — no write needed",
+              verify_failed:"read-back verify FAILED — device does NOT hold the program",
+              clear:"grid timers disabled", disable:"grid timers disabled",
+              keep:"stays on (deliberate, no write)"};
+    bits.push(t+(e.timer_action?" → "+(TA[e.timer_action]||e.timer_action):""));
+    if(i.fire_str) bits.push("programmed "+i.fire_str); }   // ladder: each write's own time
+  if(e.event==="act_failed") bits.push(((e.action||{}).type||"act")
+    +" FAILED"+((e.result||"").includes("4002")?" — cloud refusal (4002)":""));
+  // event NAME night_over is contract; the DETAIL tells the truth: the DAY
+  // window ended → the night phase begins (copy fix, owner 2026-10-26)
+  if(e.event==="night_over") bits.push("day window ended → phase night");
+  // owner ruling2026-10-25 (part 3): the reserve-tier events carry their WHY
+  if(e.event==="reserve_tier") bits.push("reserve tier "+i.tier_pct+"% (BMS SOC) · triggers: "+
+      ((i.triggers||[]).join("; ")||"none")+" · look-ahead "+i.lookahead_days+" d"+
+      (i.outlook_ts?" · outlook "+loc(i.outlook_ts):""));
+  if(e.event==="tier_hold") bits.push("tier hold — grid stays on until BMS SOC reaches "+
+      i.tier_pct+"%");
+  if(e.event==="grid_on") bits.push("grid on at the reserve tier (shallow cycle, not an emergency)");
+  if(i.reason) bits.push(i.reason);
+  if(i.soc!=null) bits.push("SOC "+i.soc+"%");
+  if(i.available_wh!=null) bits.push("available "+(i.available_wh/1000).toFixed(2)+" kWh");
+  if(i.need_wh!=null) bits.push("need "+(i.need_wh/1000).toFixed(2)+" kWh");
+  if(e.result && e.result!==true && typeof e.result!=="object") bits.push("→ "+e.result);
+  return bits.join(" · ")||"—"; }
+// --- owner part4 (2026-10-26): weather-conditional UPS reserve tiers --------
+// DISPLAY vocabulary (BINDING, ALL ENGLISH): tier 0/30/50 only; any other or
+// missing tier value = UNKNOWN → render NOTHING in that spot (never "No UPS
+// mode" as a default — that label is a real tier-0 statement only).
+// OWNER DIRECTIVE 2026-10-26 (no frontend value inventions): NO hysteresis
+// constant here — every threshold number comes from the payload:
+//   tier_hold.inputs.release_at_pct      (tier + hysteresis, backend-computed)
+//   reserve_tier.inputs.release_hyst_pct (configured TIER_RELEASE_HYST_PCT)
+// absent → the effect/band renders WITHOUT the threshold number.
+function upsVocab(t){
+  if(t===0) return {name:"No UPS mode", effect:"good weather forecast"};
+  if(t===30) return {name:"Medium UPS mode"};
+  if(t===50) return {name:"Strong UPS mode"};
+  return null; }
+// release threshold (SOC %) from payload only: the matching hold's
+// backend-computed release_at_pct first, else tier + the event's own
+// release_hyst_pct (both payload operands) — otherwise null (no number)
+function upsReleaseAt(t, evInputs, holdInputs){
+  const hi=holdInputs||{};
+  if(typeof hi.release_at_pct==="number" &&
+     (hi.tier_pct==null||hi.tier_pct===t)) return hi.release_at_pct;
+  const h=(evInputs||{}).release_hyst_pct;
+  return (typeof h==="number"&&typeof t==="number") ? t+h : null; }
+// effect sentence for a mode: tier number = payload tier_pct; the release
+// threshold only when the payload publishes it, else number-free wording
+function upsEffect(t, evInputs, holdInputs){
+  if(t===0) return "good weather forecast";
+  const rel=upsReleaseAt(t, evInputs, holdInputs);
+  return (rel!=null
+      ? "release held until SOC ≥ "+rel+" %"
+      : "release held until the release threshold")
+    +" · drain stops at "+t+" %"; }
+const esc=s=>String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+// the WHY: trigger strings VERBATIM (they already read human) — cleaned up
+// only (trim, drop empties, join), NEVER reworded into a different claim
+function upsWhy(inputs, sep){
+  const t=(inputs||{}).triggers;
+  return (Array.isArray(t)?t:[]).map(s=>String(s).trim()).filter(s=>s!=="")
+      .join(sep||" · "); }
+function upsTier(ev){ const t=(ev&&ev.inputs||{}).tier_pct;
+  return typeof t==="number"?t:null; }
+// banner HTML (weather card) — null = hide the strip entirely (no event → honest absence)
+function upsBannerHtml(g){
+  const pl=(g||{}).plan||{}, ev=(pl.reserve_tier_hist||[])[0];
+  const t=upsTier(ev), v=upsVocab(t);
+  if(!ev||!v) return null;
+  const soc=((g||{}).decision||{}).soc_pct;
+  const hold=pl.tier_hold||null, hi=(hold&&hold.inputs)||{};
+  const rel=upsReleaseAt(t, ev.inputs, hi);
+  const holdMatch=!!(hold&&t!=null&&hi.tier_pct===t);
+  let s="<b>"+v.name+"</b>";
+  const why=upsWhy(ev.inputs); if(why) s+=" · "+esc(why);
+  if(ev.ts) s+=" · set "+loc(ev.ts);
+  if(soc!=null){
+    if(t===0) s+=" · SOC "+soc+" % — released";
+    else if(rel!=null) s+=(soc<rel)
+        ? " · SOC "+soc+" % — hold active (release at ≥ "+rel+" %)"
+        : " · SOC "+soc+" % — released";
+    // no threshold published: only claim what the hold event itself asserts
+    else s+=" · SOC "+soc+" % — "+(holdMatch?"hold active":"released");
+  }
+  return s; }
+// forecast → decision influence rows — [] = hide the WHOLE section (never an
+// empty frame); STATUS: newest row active iff the latest tier_hold MATCHES the
+// row's tier with its recorded soc below the payload release threshold (no
+// threshold published → the audited hold itself is the evidence), else
+// released; older rows superseded
+function upsRowsHtml(g){
+  const pl=(g||{}).plan||{}, hist=(pl.reserve_tier_hist||[]).slice(0,8);
+  if(!hist.length) return "";
+  const hold=pl.tier_hold||null, hi=(hold&&hold.inputs)||{};
+  return hist.map(function(ev, idx){
+    const t=upsTier(ev), v=upsVocab(t), why=upsWhy(ev.inputs,", ");
+    const rel=upsReleaseAt(t, ev.inputs, hi.tier_pct===t?hi:null);
+    const holdMatch=!!(hold&&t!=null&&hi.tier_pct===t);
+    let st;
+    if(idx>0) st="superseded";
+    else if(!holdMatch) st="released";
+    else if(rel!=null&&typeof hi.soc==="number") st=(hi.soc<rel)?"active":"released";
+    else st="active";  // hold audited, threshold not published yet
+    const stHtml=st==="active"?"<span class='st-active'>active</span>"
+      :st==="released"?"<span class='st-released'>released</span>"
+      :"<span class='dim'>superseded</span>";
+    return "<tr><td class='dim'>"+loc(ev.ts)+"</td><td>"+
+      (why?esc(why):"<span class='dim'>—</span>")+"</td><td>"+
+      (v?esc(v.name)+" · "+t+" %":"<span class='dim'>—</span>")+"</td><td>"+
+      (v?esc(upsEffect(t, ev.inputs, hi.tier_pct===t?hi:null)):"<span class='dim'>—</span>")+
+      "</td><td>"+stHtml+"</td></tr>";
+  }).join(""); }
+// Action Plan card sentence — null = omit entirely (no fabrication)
+function upsPlanLine(g){
+  const pl=(g||{}).plan||{}, ev=(pl.reserve_tier_hist||[])[0];
+  const t=upsTier(ev), v=upsVocab(t);
+  if(!ev||!v) return null;
+  if(t===0) return "Weather-independent: good forecast (No UPS mode).";
+  const hold=pl.tier_hold||null, hi=(hold&&hold.inputs)||{};
+  return "Weather-driven: "+v.name+" — "+
+      upsEffect(t, ev.inputs, hi.tier_pct===t?hi:null)+"."; }
+// one wiring point for all three UPS-mode areas (also driven by the smoke harness)
+function upsRender(g){
+  const bh=upsBannerHtml(g), strip=$("ups-strip");
+  if(bh){ strip.innerHTML=bh; strip.style.display=""; }
+  else { strip.innerHTML=""; strip.style.display="none"; }
+  const rows=upsRowsHtml(g), card=$("infl-card");
+  if(rows){ $("infl-body").innerHTML=rows; card.style.display=""; }
+  else { $("infl-body").innerHTML=""; card.style.display="none"; }
+  const line=upsPlanLine(g), apw=$("ap-wx");
+  if(line){ apw.textContent=line; apw.style.display=""; }
+  else { apw.textContent=""; apw.style.display="none"; } }
+// Phase D: the reference basis as ONE compact honest detail line where the
+// crossing shows — first clip window + its hours + the night total (further
+// clips are COUNTED, never silently dropped); >60 chars → the rate form.
+// Absence (payload null per the absence rule) → "" — nothing is rendered.
+function refDetail(r){
+  if(!r||!r.source) return "";
+  if(!r.clips||!r.clips.length) return "ref: "+r.source;
+  const c=r.clips[0];
+  let s="ref: "+(r.night||"?")+" "+c.start.slice(11,16)+"→"+c.end.slice(11,16)+
+        " · "+(Number(c.hours)||0).toFixed(2)+"h · "+r.wh+" Wh";
+  if(r.clips.length>1) s+=" · +"+(r.clips.length-1)+" more";
+  return s.length>60?"ref: "+(r.night||"?")+" · "+r.wh_h+" Wh/h":s;
+}
+async function load(){
+ try{
+  const g=await (await fetch("api/gridguard")).json();
+  const st=g.status||{};
+  const p=$("pill"); const a=st.tick_age_s;
+  // cadence-aware heartbeat (owner QA2026-10-21): the addon probes every ~10
+  // min while awake but PROBE_NIGHT_S=30 min at night — thresholds follow the
+  // current phase, and the TEXT never claims LIVE when the color says otherwise
+  const cad=(st.phase==="night")?1800:600;
+  p.className="pill "+(a==null?"dead":a<=cad?"live":a<=2*cad?"stale":"dead");
+  p.textContent=a==null?"○ NO HEARTBEAT":
+    a<=cad?("● LIVE · tick "+age(a)+" ago"):
+    a<=2*cad?("● STALE · tick "+age(a)+" ago · "+(st.phase||"?")+" cadence"):
+    ("○ NO HEARTBEAT · tick "+age(a)+" ago");
+  $("mode").innerHTML=st.mode?('<span class="badge'+(st.mode==="DRY"?" dry":"")+'">'+st.mode+'</span>'):"";
+  // meta line: the process start is the ADDON's loop, not the page — web
+  // redeploys do not restart it (owner QA: 'started 17:54' read like a
+  // frozen page). Worded so every clause is self-explanatory.
+  $("meta").textContent="phase: "+(st.phase||"—")+" · loop process since "+
+      loc(st.started)+" · labelled grid-ON windows: "+(st.grid_on_windows||0);
+  const c=g.counters||{}, d=c.day, n=c.night;
+  $("day-kwh").textContent=d?((d.kwh>=0?"+":"")+d.kwh.toFixed(2)+" kWh"):"–";
+  $("night-kwh").textContent=n?((n.kwh>=0?"+":"")+n.kwh.toFixed(2)+" kWh"):"–";
+  $("day-range").textContent=d?(loc(d.from)+" → "+loc(d.to)+(d.running?" · running":"")+
+      (d.today?"":" · last solar day — none today, the night runs on")):"no solar input measured";
+  $("night-range").textContent=n?(loc(n.from)+" → "+loc(n.to)+(n.running?" · running":"")):"no night yet";
+  const held=(d?d.corrected:0)+(n?n.corrected:0);
+  const meas=(d?d.measured_out||0:0)+(n?n.measured_out||0:0);
+  $("day-window").textContent="solar-day boundary = first → last measured charge current above the flow threshold, between calendar sunrise and sunset (no grid gating)";
+  // candidate F (§14): "withheld" is the KNOWN-window compensation only; the
+  // measured-ON slice is never withheld — it is disclosed here (kept in net)
+  $("zeroed").textContent=(held?("grid ON → out compensated: "+held.toFixed(2)+
+      " kWh withheld (known grid-ON only)"):"grid ON → out compensated: nothing withheld")+
+      (meas?" · "+meas.toFixed(2)+" kWh under △ measured ON — disclosed, kept in the net":"");
+  const pl=g.plan||{}, kv=[];
+  const eve=pl.eve;
+  // act events carry their meaning in action.type ("act" alone is cryptic)
+  const vName=eve?((eve.event==="act"&&eve.action&&eve.action.type)
+      ?"act/"+eve.action.type:eve.event):"—";
+  if(eve) kv.push(["Last switching verdict", vName+" · "+loc(eve.ts)]);
+  if(eve&&eve.inputs&&eve.inputs.reason) $("plan-note").textContent=eve.inputs.reason;
+  else $("plan-note").textContent="—";
+  if(pl.night_need&&pl.night_need.inputs){ const i=pl.night_need.inputs;
+    kv.push(["Night need",(i.need_wh==null?
+      "— (no clean history: "+(i.clean!=null?i.clean:"?")+" CLEAN night(s) — first real need after the next clean night)":
+      (i.need_wh/1000).toFixed(2)+" kWh · learned CLEAN-median")]);
+    if(i.safety!=null) kv.push(["Safety factor","×"+i.safety]); }
+  else kv.push(["Night need","— (no eve data yet)"]);
+  const batLive=((g.decision||{}).battery_live||{});
+  kv.push(["Battery available (live)", batLive.kwh!=null?
+    batLive.kwh.toFixed(2)+" kWh · "+batLive.remaining_ah.toFixed(1)+" Ah × "+batLive.pack_v.toFixed(2)+" V — the eve's formula, but NOW":
+    "—"]);
+  if(pl.night_need&&pl.night_need.inputs&&pl.night_need.inputs.available_wh!=null)
+    kv.push(["Eve basis (snapshot)",(pl.night_need.inputs.available_wh/1000).toFixed(2)+
+      " kWh at "+loc(pl.night_need.ts)+" — tonight's eve recomputes the verdict"]);
+  if(pl.night_need&&pl.night_need.inputs&&pl.night_need.inputs.need_wh!=null)
+    kv.push(["Learned night energy — how it's built",
+      (pl.night_need.inputs.clean!=null?pl.night_need.inputs.clean:"?")+
+      " CLEAN night(s) · each night integrated (Wh) "+
+      "from the whole BMS history in the learned night window, median = the prediction "+
+      "(energy is the unit — owner ruling 2026-10-22)"]);
+  const w=g.weather||{};
+  kv.push(["Forecast irradiation", w.radiation_kwh_m2!=null?
+    (w.radiation_kwh_m2+" kWh/m²/day · the last eve's input ("+(w.ts?loc(w.ts):"–")+") — live forecast: Weather outlook card"):"no forecast"]);
+  if(pl.latest_emergency) kv.push(["Emergency act",pl.latest_emergency.event+" · "+loc(pl.latest_emergency.ts)]);
+  $("plan-kv").innerHTML=kv.map(r=>"<div class='k'>"+r[0]+"</div><div class='v'>"+r[1]+"</div>").join("");
+  const D=g.decision||{};
+  const heroOn=!!D.grid_now;
+  $("hero-state").textContent=heroOn?"GRID ON":"GRID OFF";
+  $("hero-state").className="hero-state "+(heroOn?"on":"off");
+  $("hero-sub").textContent=(heroOn?"grid carries the loads":"battery + solar carry the loads")+
+      " · since "+(D.grid_since?loc(D.grid_since):"—");
+  const amp=D.last_current_a;
+  $("hero-ev").textContent="pack "+(amp!=null?amp.toFixed(1)+" A":"—")+" · "+
+      (amp==null?"no live reading":
+       Math.abs(amp)<=2.0?(heroOn?"battery idle — loads on grid (BMS evidence)":
+                           "battery idle — no flow (full or no load)"):
+       amp>0.4?"battery charging (solar)":"battery discharging");
+  // Actor plan card (owner redesign 2026-10-21/22 + display-truth doctrine
+  // 2026-10-26): the ANNOUNCED grid-on = the LAST write-confirmed programming
+  // (decision.announced_on_at — the ensure_on act's own fire_str, result ok;
+  // multi-write last-wins = what actually controls the actor). The plan ideal
+  // (decision.planned_on_at — the planner's internal crossing from the
+  // NIGHT PLAN push) renders ONLY with its own label, never as confirmed.
+  // ABSENCE RULE (binding): no time-bearing write in the journal → NO
+  // announced time at all — never the plan ideal in its place, never an
+  // invented time. A program whose anchored firing moment is PAST is spent
+  // (already fired / disabled by the morning drain) and must not keep
+  // advertising itself (owner QA2026-10-22).
+  const annSpent=!!D.announced_fires_at&&new Date(D.announced_fires_at)<=new Date();
+  const A=!!D.announced_on_at&&!annSpent;      // write-confirmed and still ahead
+  const expired=!!D.planned_on_at&&!!D.planned_fires_at&&
+      new Date(D.planned_fires_at)<=new Date();
+  const PI=!!D.planned_on_at;                  // plan ideal — labelled, never confirmed
+  $("ap-state").textContent=A?"GRID ON":"NO ACTION";
+  $("ap-state").className="hero-state "+(A?"on":"");
+  $("ap-time").textContent=A?"at "+D.announced_on_at:
+      (PI?"plan ideal "+D.planned_on_at:"");
+  $("ap-time").className="ap-time "+(A?"on":"");
+  $("ap-sub").textContent=A
+      ?"programmed on the device — write-confirmed, fires without WiFi (actor-night)"+
+       (PI&&D.planned_on_at!==D.announced_on_at?" · plan ideal "+D.planned_on_at:"")
+      :(!!D.announced_on_at
+        ?"write-confirmed program "+D.announced_on_at+" already fired — nothing armed now (the eve decides tonight)"
+        :(PI
+          ?"plan ideal "+D.planned_on_at+(expired?" already passed":"")+
+           " — NOT write-confirmed (no timer programming in the journal) — the eve decides tonight"
+          :"no switch programmed for tonight — the eve decides"));
+  // display-truth (owner REFERENCE-LOAD model, Phase A): the BASIS the
+  // crossing is computed from renders WHERE the crossing time shows —
+  // payload-built, one compact honest line, absent = nothing rendered
+  if(D.last_ref) $("ap-sub").textContent+=" · "+D.last_ref;
+  // Phase D: the full reference truth (clip window/hours/total) as a second
+  // compact line beside it — absent = nothing rendered
+  if(D.reference) $("ap-sub").textContent+=" · "+refDetail(D.reference);
+  $("ap-off").innerHTML=A
+      ?"<span class='chip off'>night plan: GRID OFF until then — battery-first release</span>":"";
+  $("ap-eve").textContent=(A
+      ?"next decision: the write-confirmed timer at "+D.announced_on_at+" (fires device-side, no WiFi needed)"
+      :(PI&&!expired
+        ?"plan ideal "+D.planned_on_at+" (NOT write-confirmed — no timer write in the journal)"
+        :"next decision: tonight's eve run (no clock time shown — the run decides)"))+
+      " · last switching verdict: "+(eve?vName+" · "+loc(eve.ts):"—");
+  // Phase B/C: the horizon's source is a LABEL only (measured | predicted |
+  // profile | none) — a prediction may never occupy an armed/announced slot.
+  // ORDER (F-1): this append sits AFTER the ap-eve assignment above — an
+  // append BEFORE the reassign is dead JS and would never paint.
+  if(D.onset_src) $("ap-eve").textContent+=" · onset src: "+D.onset_src+" (label, not state)";
+  const bat=D.battery_live||{};
+  $("bat-kwh").textContent=bat.kwh!=null?bat.kwh.toFixed(2)+" kWh":"–";
+  $("bat-soc").textContent="SOC "+(bat.soc!=null?bat.soc:"–")+"% · live";
+  $("bat-formula").textContent=(bat.remaining_ah!=null&&bat.pack_v!=null)
+      ?(bat.remaining_ah.toFixed(1)+" Ah × "+bat.pack_v.toFixed(2)+" V"):"";
+  $("bat-note").innerHTML=(D.available_wh!=null
+      ?"<span class='dim'>plan basis: "+(D.available_wh/1000).toFixed(2)+" kWh at "+(D.as_of?loc(D.as_of):"–")+"</span>"
+      :"<span class='dim'>plan basis: —</span>");
+  const rows=[];
+  rows.push(["Rule", D.rule||"—"]);
+  rows.push(["Switch now", (D.grid_now?"ON":"OFF")+" · numbers as of "+(D.as_of?loc(D.as_of):"—")]);
+  rows.push(["Night energy (learned)", D.need_wh!=null
+      ? (D.need_wh/1000).toFixed(2)+" kWh learned consumption · ×"+(D.safety!=null?D.safety:"?")+
+        (D.safety!=null?" = "+(D.need_wh*D.safety/1000).toFixed(2)+" kWh required":"")+
+        " · source: CLEAN-median of the clean nights ("+(D.clean!=null?D.clean:"?")+
+        " clean), each night integrated (Wh) from the cluster history — energy is the prediction unit"
+      : "not determinable yet — CLEAN nights: "+(D.clean!=null?D.clean:"?")+
+        " · source: night buckets (rolling window)"]);
+  rows.push(["Available", D.available_wh!=null
+      ? (D.available_wh/1000).toFixed(2)+" kWh · source: BMS reading (remaining × live pack voltage)"
+      : "—"]);
+  rows.push(["Ratio verdict", (D.need_wh==null||D.safety==null)
+      ? "conservative rule → SWITCH ON"
+      : (D.available_wh!=null && D.available_wh>=D.safety*D.need_wh
+         ? "CARRIES (available ≥ required)" : "DOES NOT carry → SWITCH ON")]);
+  const g3=D.gate||{};
+  rows.push(["Weather reference", g3.radiation_kwh_m2!=null
+      ? g3.radiation_kwh_m2+" kWh/m²"+(g3.gate_kwh_m2!=null?" (reference "+g3.gate_kwh_m2+")":"")+
+        " · source: open-meteo forecast doc "+(g3.ts?loc(g3.ts):"—")+
+        (g3.gate_kwh_m2!=null
+          ?" · shared bad-solar reference (display + reserve-tier decision)"
+          :"")
+      : "no forecast yet"]);
+  rows.push(["SOC at check", (D.soc_pct!=null?D.soc_pct:"—")+"% · source: BMS sample (live)"]);
+  rows.push(["Timers", "the eve arms the grid-RETURN at the learned crossing (see the NEXT chip above); the day side has no timer and no gate — the drain rule fires the moment a valid reading shows the battery above the safety floor"]);
+  rows.push(["Acts", ((D.acts||[]).map(a=>loc(a.ts)+" "+a.type+
+      (a.fire?" @"+a.fire:"")+" → "+a.result).join(" · ")||"—")+
+      (D.keep_grid_n?" · +"+D.keep_grid_n+"× keep_grid while ON":"")]);
+  $("dec-kv").innerHTML=rows.map(r=>"<div class='k'>"+r[0]+"</div><div class='v'>"+
+      String(r[1]).replace(/</g,"&lt;")+"</div>").join("");
+  const fc=g.forecast3||[];
+  $("wx-body").innerHTML=fc.length?fc.map(w=>
+    "<tr><td>"+w.date+"</td><td class='num'>"+(w.kwh_m2!=null?w.kwh_m2:"—")+"</td><td>"+
+    (w.gate_ok==null?"<span class='dim'>—</span>":
+      w.gate_ok?"<span class='chip in'>≥ ref</span>":"<span class='chip out'>&lt; ref</span>")+
+    "</td></tr>").join(""):"<tr><td colspan='3' class='dim'>forecast unavailable</td></tr>";
+  // L1 yield learning (owner ruling 2026-10-25): TWO per-class factors over
+  // the SAME yield_hist — grid-ON days measure the GROSS solar intake into
+  // the pack, grid-OFF days the NET after covering the load; the pack shunt
+  // measures differently by grid state, so the median must not drift with the
+  // switching mix. A class with zero days shows NO row (never a fabricated
+  // number); the overall median stays the honest expectation fallback. The
+  // units compose, so the COMING day's forecast irradiation × factor is an
+  // honest IRRADIATION-scaled expectation (fc[0] is always TODAY → the
+  // expectation date-matches tomorrow). DISPLAY ONLY — never a gate (v7).
+  const yh=((g.plan||{}).yield_hist||[])
+      .map(e=>(e.inputs||{}))
+      .filter(i=>typeof i.factor==="number"&&i.factor>0);
+  const medOf=a=>a.slice().sort((x,y)=>x-y)[Math.floor(a.length/2)];
+  const fAll=yh.map(i=>i.factor);
+  const fOn=yh.filter(i=>i.class==="grid_on").map(i=>i.factor);
+  const fOff=yh.filter(i=>i.class==="grid_off").map(i=>i.factor);
+  const wl=$("wx-learn"), wl2=$("wx-learn2"), wl3=$("wx-learn3");
+  // cheap surfacing of the NEWEST learned day's class (owner2d: no redesign)
+  const latest=((g.plan||{}).yield_learned||{}).inputs||{};
+  // owner part4 (2026-10-26) COMPACTION: same facts, ~half the words (≤60 %
+  // of the former prose) — the class + value + unit + day count carry it all
+  const latestTxt=latest.class
+      ?", latest "+(latest.class==="grid_on"?"grid-ON":
+        latest.class==="grid_off"?"grid-OFF":latest.class)+
+       (typeof latest.grid_on_pct==="number"
+        ?" "+Math.round(latest.grid_on_pct)+" %":"")
+      :"";
+  if(fOn.length){
+    wl.textContent="grid-ON factor: "+medOf(fOn).toFixed(2)+
+        " kWh/kWh/m² · "+fOn.length+" d"+latestTxt;
+    wl.style.display="";
+  } else if(!fOff.length&&fAll.length){
+    // no class at all in the history (docs predating the class field): the
+    // honest overall line, unchanged in spirit
+    wl.textContent="overall median: "+medOf(fAll).toFixed(2)+
+        " kWh/kWh/m² (n="+fAll.length+")"+latestTxt;
+    wl.style.display="";
+  } else wl.style.display="none";
+  if(fOff.length){
+    wl2.textContent="grid-OFF factor: "+medOf(fOff).toFixed(2)+
+        " kWh/kWh/m² · "+fOff.length+" d";
+    wl2.style.display="";
+  } else wl2.style.display="none";
+  if(fAll.length){
+    // the eve's own verdict names tonight's expected grid state: hold/
+    // bring-on (grid ON through the night) → the grid-ON factor; release /
+    // none-ish (night_release, safe_clear, rescue_timer) → the grid-OFF
+    // factor; anything else — or a picked class without days — → overall.
+    const at=eve&&eve.action&&eve.action.type;
+    let eveCls=null;
+    if(eve){
+      if(eve.event==="eve_bring_on_suppressed"||at==="keep_grid") eveCls="on";
+      else if(eve.event==="grid_off"||at==="failsafe_timer"
+              ||["NIGHT PLAN","NACHTPLAN"].includes(eve.kind)) eveCls="off";
+    }
+    // picked class without a single day → NULL → honest overall fallback
+    let pick=null, expName="overall median";
+    if(eveCls==="on"&&fOn.length){ pick=fOn; expName="grid-ON median"; }
+    else if(eveCls==="off"&&fOff.length){ pick=fOff; expName="grid-OFF median"; }
+    const expMed=medOf(pick||fAll);
+    const expDays=(pick||fAll).length;
+    const td=new Date(); td.setDate(td.getDate()+1);
+    const tom=td.getFullYear()+"-"+pad(td.getMonth()+1)+"-"+pad(td.getDate());
+    const fn=fc.find(w=>w&&w.date===tom)||fc[1];
+    wl3.textContent=expName+": "+expMed.toFixed(2)+
+        " kWh/kWh/m² (n="+expDays+")"+(fn&&fn.kwh_m2!=null
+        ?" · "+fn.date+" "+fn.kwh_m2+" kWh/m² ≈ "+
+          (fn.kwh_m2*expMed).toFixed(2)+" kWh into battery"
+        :"")+" (learning — never a gate)";
+    wl3.style.display="";
+  } else wl3.style.display="none";
+  $("wx-note").textContent=(g3.gate_kwh_m2!=null
+      ? "ref "+g3.gate_kwh_m2+" kWh/m²/day (shared bad-solar reference: display + reserve-tier decision) · "
+      : "")+"measured today: "+
+      (g.measured_today_kwh!=null?g.measured_today_kwh.toFixed(2):"—")+
+      " kWh; forecast = plane irradiation, measured = battery";
+  // owner part4 (2026-10-26): UPS-mode layer (banner + influence table +
+  // weather-driven plan line) — all three hide themselves when the payload
+  // carries no reserve_tier event (honest absence, never a default mode)
+  upsRender(g);
+  const hist=g.history||[];
+  // owner directive 2026-10-26: the era comes from the payload (first
+  // labelled evidence event) — was a hardcoded date; absent → no date at all
+  $("hist-era").textContent=g.label_era
+      ? "labels exist since "+loc(g.label_era)
+      : "labels exist since the first labelled evidence";
+  // actor column: clipped ON/OFF segments per row (server clips the labelled
+  // windows; unknown before the first act — never inferred to OFF)
+  // ruling #10 disclosures: plan_marks render as EXPLICITLY-LABELLED context
+  // ("plan ideal HH:MM" — never a boundary), and an ON edge that came from the
+  // measured gap-fill says so at the edge (seg src==="measured")
+  function actorCell(h){
+    const segs=h.actor||[];
+    const marks=(h.plan_marks||[]).map(m=>"<span class='dim'>plan ideal "+esc(m.time)+"</span>")
+        .join(" <span class='dim'>·</span> ");
+    const mSrc=s=>s.src==="measured"?" <span class='dim'>· start measured</span>":"";
+    if(!segs.length) return marks||"<span class='dim'>—</span>";
+    const hm=iso=>loc(iso).slice(-5);
+    if(segs.length===1){
+      const s=segs[0];
+      let one;
+      if(s.s==="unknown") one="<span class='dim'>unlabelled</span>";
+      // owner spec 2026-10-24: the since belongs INSIDE the pill
+      else one="<span class='chip "+(s.s==="on"?"on":"off")+"'>GRID "+
+        (s.s==="on"?"ON":"OFF")+" whole"+
+        (s.since?" · since "+hm(s.since):"")+"</span>";
+      one+=mSrc(s);
+      return one+(marks?" <span class='dim'>·</span> "+marks:"");
+    }
+    const base=segs.map(s=>{
+      if(s.s==="unknown") return "<span class='dim'>unlabelled "+hm(s.from)+"–"+hm(s.to)+"</span>";
+      return "<span class='chip "+(s.s==="on"?"on":"off")+"'>"+
+        (s.s==="on"?"ON":"OFF")+" "+hm(s.from)+"–"+hm(s.to)+"</span>"+mSrc(s);
+    }).join(" <span class='dim'>·</span> ");
+    return base+(marks?" <span class='dim'>·</span> "+marks:"");
+  }
+  // owner spec 2026-10-24 (second iteration): TEXT-FREE proportional bar in
+  // its own column right of the pills — each segment spans its share of the
+  // row's period (FROM→TO); fills = the pills' bright letter colors
+  function actorBar(h){
+    const segs=h.actor||[];
+    if(!segs.length) return "<span class='dim'>—</span>";
+    const t0=Date.parse(h.from), t1=Date.parse(h.to);
+    if(!(t1>t0)) return "<span class='dim'>—</span>";
+    const span=t1-t0;
+    const parts=segs.map(s=>{
+      const w=Math.max(0,Math.min(100,(Date.parse(s.to)-Date.parse(s.from))/span*100));
+      return "<span class='vseg "+(s.s==="on"?"on":s.s==="off"?"off":"unk")+
+        "' style='flex:0 0 "+w.toFixed(2)+"%'></span>";
+    }).join("");
+    return "<span class='vbar'>"+parts+"</span>";
+  }
+  $("hist-body").innerHTML=hist.length?hist.map(h=>{
+    const isDay=h.kind==="day";
+    return "<tr><td><span class='chip "+(isDay?"in":"out")+"'>"+(isDay?"SOLAR DAY":"SOLAR NIGHT")+
+      "</span>"+(h.day?" "+h.day:"")+"</td><td class='dim'>"+loc(h.from)+"</td>"+
+      "<td class='dim'>"+loc(h.to)+(h.sunless?" · "+h.sunless+" sunless d":"")+
+      (h.running?" · running":"")+
+      "</td><td>"+actorCell(h)+"</td><td>"+actorBar(h)+
+      "</td><td class='num'>"+((h.kwh>=0?"+":"")+h.kwh.toFixed(2)+" kWh")+
+      "</td><td class='num dim'"+(h.measured_out?" style='white-space:nowrap'":"")+">"+
+      // candidate F sign rule (§14): the "-" prefix is RESERVED for truly
+      // WITHHELD energy (corrected, known grid-ON only — removed from the
+      // net). The measured-ON disclosure is NOT withheld — it stayed inside
+      // the net shown left — so it renders unsigned, with its tier marker.
+      (h.corrected?"-"+h.corrected.toFixed(2)+" kWh":"—")+
+      // owner compact-cell + one-line orders (2026-10-26): value + ONE text
+      // glyph (U+26A0 + U+FE0E text variation selector, written as JS
+      // escapes so the invisible selector stays greppable in source) with a
+      // native tooltip carrying the full explanation; the disclosure joins
+      // the withheld state INLINE ("·" separator, no line break) and the
+      // disclosure td alone gets white-space:nowrap — disclosure rows keep
+      // the height of every other row; withheld cells keep plain "-X kWh",
+      // empty stays "—"
+      (h.measured_out?" · "+h.measured_out.toFixed(2)+" kWh <span class='dim' title='measured ON — kept in net: the grid-ON label is measurement-derived (a fill, not an observed switch), so the discharge stays visible in the net' aria-label='measured ON — kept in net: the grid-ON label is measurement-derived (a fill, not an observed switch), so the discharge stays visible in the net'>\u26A0\uFE0E</span>":"")+
+      "</td></tr>";}).join(""):
+    "<tr><td colspan='6' class='dim'>no history yet</td></tr>";
+  const dec=g.decisions||[];
+  $("dec-body").innerHTML=dec.length?dec.map(e=>
+    "<tr><td class='dim'>"+loc(e.ts)+"</td><td>"+(e.event||"—")+"</td><td class='dim'>"+
+    detail(e).replace(/</g,"&lt;")+"</td></tr>").join(""):
+    "<tr><td colspan='3' class='dim'>no decisions yet</td></tr>";
+ }catch(err){ $("pill").className="pill dead"; $("pill").textContent="○ API ERROR"; }
+}
+// page refresh cadence — ONE constant; the footer renders from it (the page
+// describing its own behavior, never a backend domain value)
+const AUTOREFRESH_S=60;
+$("ft-refresh").textContent="auto-refresh"+AUTOREFRESH_S+"s";
+load(); setInterval(load,AUTOREFRESH_S*1000);
+</script></body></html>"""

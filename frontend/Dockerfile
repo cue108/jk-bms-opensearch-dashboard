@@ -5,6 +5,7 @@ FROM python:3.12-slim
 
 WORKDIR /app
 COPY server.py .
+COPY addon_gateway.py .
 COPY web/ web/
 
 ENV PYTHONUNBUFFERED=1

@@ -1,0 +1,4 @@
+Bad_Id = http://x/
+not an assignment line
+goodone = http://10.0.0.9:9001
+x = ftp://nope/

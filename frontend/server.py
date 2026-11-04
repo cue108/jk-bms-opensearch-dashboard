@@ -1,7 +1,7 @@
 """JK BMS web frontend — live status + history charts (one tiny service).
 
-Serves both tabs of the web UI:
-  /            portal with two tabs (Status | History)
+Serves the web UI:
+  /            portal with core tabs + configured addon tabs (see addons.conf)
   /live        the live status page (polls the collector's /api/state)
   /history     history charts: uPlot, adaptive buckets (~180 per range),
                Y-axes auto-zoomed to the data range, and a cursor crosshair
@@ -23,6 +23,10 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+import addon_gateway
+
+GATEWAY = addon_gateway.AddonGateway()
 
 OS = os.environ.get("OPENSEARCH_URL", "http://127.0.0.1:9200").rstrip("/")
 INDEX = os.environ.get("INDEX", "jkbms-*")
@@ -97,6 +101,7 @@ def fetch_series(rng: str) -> dict:
             "range_ms": int(span)}
 
 
+
 HISTORY_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>JK-BMS · %DEVICE% History</title>
 <link rel="stylesheet" href="/web/uplot.min.css">
@@ -116,7 +121,7 @@ HISTORY_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
                    border-radius:6px; padding:4px 12px; cursor:pointer; font-weight:600; }
   .ranges button.on { background:#1f6feb; border-color:#1f6feb; color:#fff; }
   .grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:12px; padding:12px 20px 40px; }
-  .grid .card { min-width:0; }   /* Grid-Item darf unter Canvas-Inhalt schrumpfen — sonst kein Resize-Runter-Pfad */
+  .grid .card { min-width:0; }   /* grid item may shrink under its canvas content — otherwise no resize-down path */
   .card { background:#161b22; border:1px solid #30363d; border-radius:8px;
           padding:10px 12px 6px; position:relative; }
   .card.wide { grid-column:1 / -1; }
@@ -127,7 +132,7 @@ HISTORY_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   .legend b { color:#e6edf3; font-weight:600; margin-left:4px; }
   .legend i { width:9px; height:9px; border-radius:2px; display:inline-block; }
   .uplot, .u-wrap { width:100%; }
-  .uplot canvas { max-width:100%; }   /* Schutznetz: nie breiter als die Karte (verhindert Scrollbalken bis setSize greift) */
+  .uplot canvas { max-width:100%; }   /* safety net: never wider than the card (prevents scrollbars until setSize kicks in) */
   .tt { position:absolute; pointer-events:none; background:rgba(22,27,34,.96);
         border:1px solid #30363d; border-radius:6px; padding:6px 10px;
         font-size:12px; z-index:3; display:none; min-width:170px; }
@@ -141,7 +146,7 @@ HISTORY_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <header><span class="live">LIVE</span><h1>JK-BMS · %DEVICE% — History</h1>
   <div class="ranges" id="ranges"></div></header>
 <div class="grid" id="grid"></div>
-<div class="foot">1-minute raw data in OpenSearch · buckets adapt to the selected range
+<div class="foot">raw data in OpenSearch · buckets adapt to the selected range
  · crosshair synced across all charts · %TZ%</div>
 <script>
 "use strict";
@@ -207,7 +212,7 @@ function makeCharts() {
   charts = [];
   for (const p of PANELS) {
     document.getElementById("lg-" + p.id).innerHTML = legendHTML(p);
-    const AXFG = "#adbac7";   // Tick-Werte: heller Kontrast auf dunklem Grund
+    const AXFG = "#adbac7";   // tick values: brighter contrast on dark background
     const axes = [
       {stroke:AXFG, grid:{stroke:"#21262d"}, ticks:{stroke:"#30363d"},
        labelColor:AXFG, font:"11px sans-serif",
@@ -251,11 +256,11 @@ function makeCharts() {
     u.over.addEventListener("pointerenter", () => hovering = true);
     u.over.addEventListener("pointerleave", () => {
       hovering = false; p.tt_hide && p.tt_hide(); });
-    // Robustes Resize: die KARTE selbst beobachten (deckt Fensterziehen, Zoom
-    // und Layout-Umbrueche ab), feste Panel-Hoehe mitgeben, Messwerte <40px
-    // (Zwischenwerte waehrend des Ziehens) ignorieren, Zeichnen auf rAF legen.
-    // Der Initial-Callback des Observers korrigiert zudem einen zur Seit-
-    // ladung falsch gemessenen Anfangsbreiten-Wert.
+    // Robust resize: watch the CARD itself (covers window dragging, zoom
+    // and layout reflows), pass a fixed panel height, ignore readings <40px
+    // (intermediate values while dragging), defer drawing to rAF.
+    // The observer's initial callback also corrects an initial width
+    // value that was measured wrong at page load.
     const ph = p.wide ? 260 : 200;
     let raf = 0;
     new ResizeObserver(entries => {
@@ -344,7 +349,7 @@ h1{font-size:20px;font-weight:600} h1 small{color:var(--dim);font-weight:400;fon
 .pill{display:inline-block;padding:2px 10px;border-radius:999px;font-size:12px;font-weight:600}
 .pill.live{background:#1a3a1f;color:var(--green)} .pill.stale{background:#3a2a1a;color:var(--orange)}
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));margin-bottom:12px}
-.grid>.card{min-width:0}   /* gleicher Schrumpf-Boden wie History-Block */
+.grid>.card{min-width:0}   /* same shrink floor as the history block */
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px}
 .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim);margin-bottom:10px}
 .hero{display:flex;gap:26px;flex-wrap:wrap;align-items:baseline}
@@ -413,7 +418,7 @@ footer{color:var(--dim);font-size:12px;margin-top:14px}
   <div class="grid" style="margin:0"><table id="settings"></table></div></div>
 
 <footer>Read-only BLE client &middot; protocol: syssi/esphome-jk-bms &middot;
-<a href="/api/state">/api/state</a> &middot; data indexed to OpenSearch every minute</footer>
+<a href="/api/state">/api/state</a> &middot; data indexed to OpenSearch</footer>
 
 <script>
 const $=id=>document.getElementById(id);
@@ -513,7 +518,9 @@ def _tpl(html: str) -> str:
     """Substitute device name / timezone into a page template."""
     return html.replace("%DEVICE%", DEVICE).replace("%TZ%", TZ)
 
-PORTAL_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
+GATEWAY.tpl = _tpl          # injected seam (Task 6): forwarder templates pages
+
+PORTAL_TEMPLATE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>JK-BMS · %DEVICE%</title>
 <style>
   :root { color-scheme: dark; }
@@ -539,14 +546,12 @@ PORTAL_PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
 </style></head><body>
 <header><span class="live">LIVE</span><h1>JK-BMS · %DEVICE%</h1>
   <nav>
-    <button id="tab-live" class="on">Status (realtime)</button>
-    <button id="tab-hist">History</button>
+    __NAV__
   </nav></header>
-<iframe id="f-live" class="on" src="/live"></iframe>
-<iframe id="f-hist" src="about:blank"></iframe>
+__FRAMES__
 <script>
-const tabs = {live: ["tab-live", "f-live", "/live"],
-              hist: ["tab-hist", "f-hist", "/history"]};
+const tabs = {__TABS__};
+const hashTabs = {__HASH__};
 function show(which) {
   for (const k of Object.keys(tabs)) {
     const [tid, fid, src] = tabs[k];
@@ -558,10 +563,41 @@ function show(which) {
   }
   history.replaceState(null, "", "#" + which);
 }
-document.getElementById("tab-live").onclick = () => show("live");
-document.getElementById("tab-hist").onclick = () => show("hist");
-show(location.hash === "#history" || location.hash === "#hist" ? "hist" : "live");
+for (const k of Object.keys(tabs)) document.getElementById("tab-"+k).onclick = () => show(k);
+__INIT__
 </script></body></html>"""
+
+
+def portal_page(addon_tabs=None) -> str:
+    """Portal shell: core tabs fixed, addon tabs generated from the gate."""
+    if addon_tabs is None:
+        addon_tabs = GATEWAY.nav_tabs()
+    core = [{"key": "live", "label": "Status (realtime)", "src": "/live",
+             "hashes": [], "class": "on"},
+            {"key": "hist", "label": "History", "src": "/history",
+             "hashes": ["history", "hist"], "class": ""}]
+    tabs = core + [dict(t, **{"class": ""}) for t in addon_tabs]
+    nav = "\n    ".join(
+        f'<button id="tab-{t["key"]}"{(" class=\"" + t["class"] + "\"") if t["class"] else ""}>{t["label"]}</button>'
+        for t in tabs)
+    frames = "\n".join(
+        (f'<iframe id="f-{t["key"]}" class="on" src="{t["src"]}"></iframe>'
+         if t["class"] == "on" else
+         f'<iframe id="f-{t["key"]}" src="about:blank"></iframe>')
+        for t in tabs)
+    entries = ",\n              ".join(
+        f'"{t["key"]}": ["tab-{t["key"]}", "f-{t["key"]}", "{t["src"]}"]'
+        for t in tabs)
+    hashes = {"live": "live"}
+    for t in tabs:
+        for a in t["hashes"]:
+            hashes[a] = t["key"]
+    hashes_js = ", ".join(f'"{a}": "{k}"' for a, k in sorted(hashes.items()))
+    body = PORTAL_TEMPLATE          # former PORTAL_PAGE minus old nav/script lines
+    return (body.replace("__NAV__", nav).replace("__FRAMES__", frames)
+                .replace("__TABS__", entries).replace("__HASH__", hashes_js)
+                .replace("__INIT__",
+                         'show(hashTabs[location.hash.slice(1)] || "live");'))
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -580,6 +616,12 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def _redirect(self, code: int, loc: str) -> None:
+        self.send_response(code)
+        self.send_header("Location", loc)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def _proxy(self, path_query: str) -> None:
         try:
             req = urllib.request.Request(BACKEND + path_query)
@@ -594,7 +636,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         u = urlparse(self.path)
         if u.path == "/":
-            self._send(200, _tpl(PORTAL_PAGE).encode(), "text/html; charset=utf-8")
+            self._send(200, _tpl(portal_page()).encode(), "text/html; charset=utf-8")
         elif u.path == "/history":
             self._send(200, _tpl(HISTORY_PAGE).encode(), "text/html; charset=utf-8")
         elif u.path == "/live":
@@ -625,7 +667,17 @@ class Handler(BaseHTTPRequestHandler):
                            "application/json")
         elif u.path == "/api/health":
             self._send(200, b'{"status":"ok"}', "application/json")
+        elif u.path == "/api/addons":
+            self._send(200, json.dumps(GATEWAY.diagnostic()).encode(),
+                       "application/json")
+        elif u.path.startswith("/addon/"):
+            if not GATEWAY.forward(u.path, u.query, self):
+                self._send(404, b"not found", "text/plain")
         else:
+            red = GATEWAY.legacy(u.path, u.query)
+            if red:
+                self._redirect(red[1], red[2]); return
+            if GATEWAY.forward(u.path, u.query, self): return
             self._send(404, b"not found", "text/plain")
 
 

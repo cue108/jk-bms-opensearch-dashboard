@@ -1,0 +1,3 @@
+# name-generic example only — no real addon names (G2):
+demo = http://10.0.0.9:8101/
+second = https://host.local/x

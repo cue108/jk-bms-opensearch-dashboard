@@ -1,0 +1,13 @@
+# addons/gridguard/docker-compose.gridguard.yml
+name: gridguard
+services:
+  gridguard:
+    build: .
+    network_mode: host
+    env_file: .env
+    environment:
+      - INDEX=${INDEX:-bms-2p4s-upstairs-*}
+      - CHARTS_TZ=${CHARTS_TZ:-Europe/Madrid}
+    volumes:
+      - ./data:/data
+    restart: unless-stopped

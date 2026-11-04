@@ -57,11 +57,11 @@ and a vendored copy of [uPlot](https://github.com/leeoniya/uPlot).
 
 ## Live demo
 
-**https://bms.cue4net.com/** — a real production instance of this exact stack
+**https://bms.cue4net.com/#live** — a real production instance of this exact stack
 (same code, same containers). Like everything here it is strictly read-only:
 you can browse the live status and the full history; nothing can be changed.
 
-## Tested hardware
+## Compatibility
 
 Verified and running daily on the deployment server (an always-on desktop
 tower — mainboard MSI MS-7885):
@@ -76,8 +76,56 @@ tower — mainboard MSI MS-7885):
 - **Uptime:** continuous ~1 Hz polling, read-only, multi-day runs across
   collector restarts and one full production migration.
 
-Running a different model or adapter (USB dongles, ESP32 BLE proxies, other
-hosts)? PRs with test reports are very welcome.
+## Addons
+
+Optional **example** addons in [`addons/`](addons/) — each ships its own
+compose file and never affects the base stack. `gridguard` doubles as the
+worked example of the integration offer below: a deliberately specific
+solution to one operator's setup, kept readable as a reference.
+
+- **[`gridguard`](addons/gridguard/README.md)** — the example addon: continuous
+  intelligent, learning and weather-aware prediction and grid guard for
+  battery-backed loads. It rides the battery through the nightly
+  WLAN blackout (window: `WINDOW_START`/`WINDOW_END`, defaults 09:00/22:00)
+  and engages the grid only when the BMS demands it — immediate ON below the
+  emergency threshold, or a pre-programmed rescue timer for the small hours.
+
+## Addons — the integration offer
+
+Core writes the full BMS truth into **your** OpenSearch cluster (`bms-*`, one
+document per minute). Your data, your cluster: anything that can reach it can
+consume it. Separately, a service can become a **tab in this monitoring page**
+without being part of it — core offers the slot, the addon owns its content.
+
+**Offer one** — one line in `frontend/addons.conf` (re-read every ≤15 s; edit,
+save, no restart; an empty file = plain core with its built-in tabs):
+
+    <id> = http(s)://<internal-url>/
+
+`<id>` matches `^[a-z][a-z0-9-]{1,31}$`. Invalid lines are skipped with one
+honest log line and never affect core or other addons.
+
+**Contract for addon pages**
+
+- Serve at any URL; core mounts it same-origin at `/addon/<id>/` (prefix-stripping:
+  your service sees its bare paths, exactly as standalone).
+- Use **relative** fetch paths in your page (`fetch("api/x")`, no leading slash).
+- `GET /health` must answer in 1–2 s with JSON:
+  `{id,title,order,version,contract_version,fresh,age_s,newest_ts,hashes}`;
+  `id` must equal the config id. The tab shows **iff** health answers and
+  `fresh` is true; legacy URLs `/<id>` and `/api/<id>` redirect while configured.
+- **Proxy-through:** a configured addon's non-contract subpaths still forward —
+  under `/addon/<id>/` core is a plain GET proxy. On a `contract_version`
+  mismatch the page route (the only thing the tab's iframe ever loads) refuses
+  with a "newer core required" notice and `/api/*` answers 503, while
+  non-contract subpaths keep forwarding.
+- `%DEVICE%`/`%TZ%` tokens in HTML are substituted by core (generic tokens).
+
+**Honest trust statement:** the offer list is operator-authored under this
+stack's LAN-trust posture (`docs/security.md`) — pointing core at an addon means
+trusting its page (it is framed on core's origin). Upgrade paths if traffic ever
+warrants: let your reverse proxy short-circuit `/addon/<id>/` directly (the
+iframe URL never changes), or front the addons with a gateway.
 
 ## Quickstart (Docker Compose)
 

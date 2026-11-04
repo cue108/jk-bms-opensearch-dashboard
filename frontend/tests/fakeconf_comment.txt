@@ -1,0 +1,4 @@
+# Core addons — integration OFFER (spec §3.1). One line per addon:
+#   <id> = http(s)://<internal-url>/
+# <id>: ^[a-z][a-z0-9-]{1,31}$   ·   Empty file or comments only = pure standalone core.
+# Example:  my-addon = http://192.168.1.50:8101/

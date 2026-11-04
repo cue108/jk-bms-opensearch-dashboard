@@ -10,3 +10,10 @@ __pycache__/
 .vscode/
 .idea/
 .DS_Store
+
+# ---------------------------------------------------------------------------
+# Addon content (owner ruling 2026-11-04, supersedes Shape A strict):
+# development happens in the embedded subrepo addons/gridguard (own git);
+# when an addon state is finished its snapshot lands in this repo's main.
+# Only this repo's main is ever public.
+# ---------------------------------------------------------------------------

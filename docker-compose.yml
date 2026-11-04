@@ -8,6 +8,7 @@ name: jk-bms
 
 services:
   opensearch:
+    restart: unless-stopped
     image: opensearchproject/opensearch:3.7.0
     container_name: jkbms-opensearch
     environment:
@@ -73,8 +74,8 @@ services:
       - /run/dbus/system_bus_socket:/run/dbus/system_bus_socket:ro
     security_opt:
       # Ubuntu's AppArmor "docker-default" profile blocks D-Bus method calls,
-      # which bleak needs for scan/connect (verified on Ubuntu 25.04 — see
-      # docs/bluetooth.md). Harmless on distros without that profile.
+      # which bleak needs for scan/connect (see docs/bluetooth.md). Harmless
+      # on distros without that profile.
       - apparmor=unconfined
     ports:
       - "${BACKEND_PORT:-8099}:8099"
@@ -87,6 +88,8 @@ services:
 
   web:
     build: ./frontend
+    volumes:
+      - ./frontend/addons.conf:/app/addons.conf:ro
     container_name: jkbms-web
     depends_on:
       - collector
