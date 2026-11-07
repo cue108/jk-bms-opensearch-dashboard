@@ -239,6 +239,18 @@ def fetch_gridguard() -> dict:
     else:
         day_start = now.replace(hour=GG_SOLARDAY_H, minute=0, second=0, microsecond=0)
     hist_start = day_start - timedelta(days=7)
+    # Owner bug order (2026-11-07): the OLDEST history
+    # row always rendered a leading "unlabelled" slice — every state-evidence
+    # query opened AT hist_start (the same 06:00 anchor the periods use), so
+    # the state that labels the first row's start (the pre-dawn fire ≈05:31 /
+    # the previous eve's switch) fell JUST behind the window, state_era
+    # landed mid-row and the leading slice had no covering evidence. Evidence
+    # now looks back GG_EVIDENCE_LOOKBACK_H behind the horizon; periods,
+    # plan marks and goldens stay exactly where they are. "Unlabelled"
+    # remains the honest answer only when NO evidence exists in the extended
+    # window either (never inferred to OFF — only the window boundary moved).
+    EVIDENCE_LOOKBACK_H = int(os.environ.get("GG_EVIDENCE_LOOKBACK_H", "48"))
+    ev_start = hist_start - timedelta(hours=EVIDENCE_LOOKBACK_H)
 
     # A) gridguard events: liveness, decisions, switch act labels (newest first)
     ev_hits = _gg_search(GG_EVENTS, {"size": 150, "sort": [{"ts": "desc"}],
@@ -282,7 +294,7 @@ def fetch_gridguard() -> dict:
         # the live hero. Labels only need STATE-CHANGING acts (switch + the
         # timer clears); failsafe/keep_grid acts carry no state.
         "query": {"bool": {
-            "filter": [{"range": {"ts": {"gte": hist_start.isoformat()}}}],
+            "filter": [{"range": {"ts": {"gte": ev_start.isoformat()}}}],
             "should": [{"bool": {"filter": [
                 {"term": {"event": "act"}},
                 {"terms": {"action.type": ["switch_on", "switch_off",
@@ -318,7 +330,7 @@ def fetch_gridguard() -> dict:
         gen_hits = _gg_search(GG_EVENTS, {
             "size": 400, "sort": [{"ts": "asc"}],
             "query": {"bool": {"filter": [
-                {"range": {"ts": {"gte": hist_start.isoformat()}}},
+                {"range": {"ts": {"gte": ev_start.isoformat()}}},
                 {"term": {"event": "act"}},
                 {"match_phrase": {"action.type": "failsafe_timer"}},
                 {"match_phrase": {"timer_action": "ensure_on"}},
