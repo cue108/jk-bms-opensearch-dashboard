@@ -84,6 +84,18 @@
      consistent with the hero; .in/.out stay for the ENERGY semantics */
   .chip.on { background:#2b2110; color:#d29922; border:1px solid #9e6a0344; }
   .chip.off { background:#12261e; color:#3fb950; border:1px solid #23863644; }
+  /* owner order 2026-11-08: history actor chips stay atomic — a five-stat
+     line (or a narrow cell's natural wrap) breaks BETWEEN chips, never
+     inside one; scoped to the history table so long prose chips elsewhere
+     keep wrapping as before */
+  #hist-body .chip { white-space:nowrap; }
+  /* owner order 2026-11-08: the actor run gets a fixed ≈five-stat width, so
+     the row's other columns keep theirs — the state chips share one fixed
+     width (HH:MM–HH:MM), so this lands on exactly five per line; a narrower
+     cell shrinks the box (max-width:100%) and the stats wrap naturally
+     inside it — no forced break anywhere (2026-10-26 order intact) */
+  #hist-body .arun { display:inline-block; width:620px; max-width:100%;
+                     vertical-align:top; }
   /* owner spec 2026-10-24 (second iteration): the bar lives in its OWN
      "visual expression" column — TEXT-FREE, segment fills = the pills'
      bright LETTER colors (amber ON, green OFF, dim grey unlabelled) */
@@ -694,12 +706,21 @@ async function load(){
       one+=mSrc(s);
       return one+(marks?" <span class='dim'>·</span> "+marks:"");
     }
+    // owner order 2026-11-08 (squeeze fix): the run lives inside a fixed
+    // ≈five-stat-wide .arun box — the actor cell's max-content shrinks to
+    // that width, so the date/bar/kWh columns keep theirs instead of the
+    // long run claiming all of it; inside the box a too-narrow cell still
+    // wraps naturally BETWEEN stats (chips never tear — #hist-body .chip
+    // carries white-space:nowrap). NO forced break tag: the2026-10-26 order
+    // keeps every cell composable without forced breaks (disclosure rows
+    // keep the height of every other row) — this wrap is ordinary inline
+    // wrapping, not a forced break, and satisfies both orders.
     const base=segs.map(s=>{
       if(s.s==="unknown") return "<span class='dim'>unlabelled "+hm(s.from)+"–"+hm(s.to)+"</span>";
       return "<span class='chip "+(s.s==="on"?"on":"off")+"'>"+
         (s.s==="on"?"ON":"OFF")+" "+hm(s.from)+"–"+hm(s.to)+"</span>"+mSrc(s);
     }).join(" <span class='dim'>·</span> ");
-    return base+(marks?" <span class='dim'>·</span> "+marks:"");
+    return "<span class='arun'>"+base+(marks?" <span class='dim'>·</span> "+marks:"")+"</span>";
   }
   // owner spec 2026-10-24 (second iteration): TEXT-FREE proportional bar in
   // its own column right of the pills — each segment spans its share of the
