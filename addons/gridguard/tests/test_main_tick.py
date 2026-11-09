@@ -1647,13 +1647,13 @@ def test_release_gate_blocks_below_the_tier_with_one_guarded_tier_hold_line():
     assert not any(a[0] == "switch_off" for a in deps.acts)     # leave the grid on
     th = [f for e, f in deps.audits if e == "tier_hold"]
     assert len(th) == 1 and th[0]["inputs"] == {"soc": 20.0, "tier_pct": 30,
-                                                "release_at_pct": 32}
+                                                "release_at_pct": 35}
     tick(cfg, st, deps, D(11, 10))                  # same state: NO second line (no spam)
     assert len([f for e, f in deps.audits if e == "tier_hold"]) == 1
     deps.soc_pct = 30.0                             # exactly AT the tier → still held
     tick(cfg, st, deps, D(11, 20))                  # (release = tier + hyst: the zones
     assert not any(a[0] == "switch_off" for a in deps.acts)   #  never overlap → no flap)
-    deps.soc_pct = 32.0                             # tier(30) + hyst(2) → release allowed
+    deps.soc_pct = 35.0                             # tier(30) + hyst(5) → release allowed
     tick(cfg, st, deps, D(11, 30))
     assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_off"]
     assert st.tier_hold_pct == 0                    # hold released (the act narrates)
@@ -1674,7 +1674,7 @@ def test_eve_release_night_holds_below_the_tier_with_a_single_tier_hold_line():
     assert deps.plan_seen and deps.plan_seen[-1][1][0][0] == "release_night"
     th = [f for e, f in deps.audits if e == "tier_hold"]
     assert len(th) == 1 and th[0]["inputs"] == {"soc": 28.0, "tier_pct": 30,
-                                                "release_at_pct": 32}
+                                                "release_at_pct": 35}
     assert st.reserve_tier_pct == 30                # latch untouched (no outlook deps fake)
 
 
@@ -1818,8 +1818,8 @@ def test_restart_seed_reload_ignores_negative_or_garbage_tier_values():
 def test_restart_seeded_tier_holds_the_release_on_the_first_tick_after_restart():
     """INTEGRATION PIN of the incident: seeded from the {tier_pct: 30} event,
     then the tick that WITHOUT the latch would fire the drain release (soc 20 <
-    release_at 32, switch ON) — the seeded hold applies on tick 1 after restart:
-    no switch_off, ONE tier_hold line."""
+    release_at 35 = tier + hyst 5, switch ON) — the seeded hold applies on
+    tick 1 after restart: no switch_off, ONE tier_hold line."""
     from gridguard.main import restore_reserve_tier
     st = AppState()
     deps = FakeDeps(remaining_ah=60.0, soc_pct=20.0, switch="on", solar_window=[],
@@ -1830,7 +1830,7 @@ def test_restart_seeded_tier_holds_the_release_on_the_first_tick_after_restart()
     assert not any(a[0] == "switch_off" for a in deps.acts)   # grid stays on
     th = [f for e, f in deps.audits if e == "tier_hold"]
     assert len(th) == 1 and th[0]["inputs"] == {"soc": 20.0, "tier_pct": 30,
-                                                "release_at_pct": 32}
+                                                "release_at_pct": 35}
 
 
 def test_restart_before_seed_opened_the_release_window():

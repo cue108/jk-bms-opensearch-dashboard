@@ -149,14 +149,19 @@ def test_voltage_floor_knobs_default_and_override():
 def test_reserve_tier_knobs_default_and_override():
     # owner ruling 2026-10-25 (part 3): the reserve-tier thresholds are POLICY
     # constants (config doctrine: env-tunable, the owner may retune) — NOT
-    # observations. Defaults: 2 consecutive low-solar days → 30 %; severe at
+    # observations. Defaults: 1 below-ref day anywhere in the window → 30 %
+    # (owner ruling 2026-11-09: any bad weather day holds the UPS mode —
+    # COUNT, not consecutive streak); severe at
     # WMO 95 / 75 km/h gusts / 25 mm/h rain INTENSITY; 3-day look-ahead window.
     # Owner ruling 2026-11-03 (metric switch): the rain leg compares the day's
     # max HOURLY rate (mm/h, DWD-anchored extreme class) — the daily-sum knob
     # (TIER2_PRECIP_MM) is retired.
     cfg = load_config(GOOD)
     assert (cfg.tier1_days, cfg.tier2_wmo_code, cfg.tier2_gust_kmh,
-            cfg.tier2_intensity_mmh, cfg.tier_lookahead_days) == (2, 95, 75.0, 25.0, 3)
+            cfg.tier2_intensity_mmh, cfg.tier_lookahead_days) == (1, 95, 75.0, 25.0, 3)
+    # hysteresis default: release at tier + 5 (owner ruling 2026-11-09:
+    # the 30 tier releases at 35, was 30/32 with hyst 2)
+    assert cfg.tier_release_hyst_pct == 5
     c2 = load_config({**GOOD, "TIER1_DAYS": "3", "TIER2_WMO_CODE": "90",
                       "TIER2_GUST_KMH": "60.5", "TIER2_INTENSITY_MMH": "12.5",
                       "TIER_LOOKAHEAD_DAYS": "5"})

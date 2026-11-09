@@ -76,11 +76,15 @@ class Config:
     # the owner may retune them; they are NOT observations). Instrument: the
     # tier comparisons run on BMS SOC (verdict.reserve_tier carve-out) — the
     # deep/emergency floors keep corrected cell voltage, untouched below.
-    tier1_days: int                  # consecutive outlook days with radiation_sum_j
-                                     # BELOW the weather card's own reference
+    tier1_days: int                  # outlook days with radiation_sum_j BELOW
+                                     # the weather card's own reference
                                      # (WEATHER_MIN_J — owner correction 2026-10-25:
-                                     # the harvest-vs-need variant is dead) → the
-                                     # 30 % moderate tier (default 2)
+                                     # the harvest-vs-need variant is dead) —
+                                     # COUNTED ANYWHERE in the window: any bad
+                                     # day holds the mode (owner ruling
+                                     # 2026-11-09: the UPS exists to bridge a
+                                     # possible grid outage ON a bad weather
+                                     # day) → the 30 % moderate tier (default 1)
     tier2_wmo_code: int              # severe 50 % tier: any outlook day with
                                      # weather_code >= this (95 = WMO thunderstorm)
     tier2_gust_kmh: float            # severe tier: day gust maximum STRICTLY above
@@ -197,12 +201,13 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         weather_index=e.get("WEATHER_INDEX", "1") != "0",
         weather_index_prefix=e.get("WEATHER_INDEX_PREFIX", "gridguard-weather"),
         # reserve tiers (owner ruling2026-10-25 part 3): POLICY thresholds, env-tunable
-        tier1_days=int(e.get("TIER1_DAYS", "2")),
+        tier1_days=int(e.get("TIER1_DAYS", "1")),
         tier2_wmo_code=int(e.get("TIER2_WMO_CODE", "95")),
         tier2_gust_kmh=fnum("TIER2_GUST_KMH", "75"),
         tier2_intensity_mmh=fnum("TIER2_INTENSITY_MMH", "25"),   # owner 2026-11-03
         tier_lookahead_days=int(e.get("TIER_LOOKAHEAD_DAYS", "3")),
-        tier_release_hyst_pct=int(e.get("TIER_RELEASE_HYST_PCT", "2")),
+        # owner 2026-11-09: band 30/35 (was 30/32) — release needs tier + 5
+        tier_release_hyst_pct=int(e.get("TIER_RELEASE_HYST_PCT", "5")),
         # reference-load model (Phase A): newest-first night window + clip floor
         reference_nights=int(e.get("REF_NIGHTS", "5")),
         reference_min_clip_min=int(e.get("REF_MIN_CLIP_MIN", "30")),

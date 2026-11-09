@@ -155,28 +155,29 @@ def reserve_tier(days, cfg: Config) -> tuple[int, list[str]]:
             seen.add("rain")
             tier2_triggers.append(
                 f"rain_intensity {inten:g} mm/h >= {cfg.tier2_intensity_mmh:g}")
-    # moderate tier: consecutive days below the WEATHER CARD's own solar
-    # reference (owner correction 2026-10-25 — the API's radiation vs the same
+    # moderate tier: days below the WEATHER CARD's own solar reference
+    # (owner correction 2026-10-25 — the API's radiation vs the same
     # reference the monitor shows, so the sentence can never claim bad outlook
     # while the card says "≥ ref"); reference unknown/disabled → no claim.
-    run = best = 0
+    # OWNER RULING 2026-11-09 (bug order, the 00:09 release): the tier COUNTS
+    # the below-ref days ANYWHERE in the window — any bad weather day holds
+    # the UPS mode (it exists to bridge a possible grid outage ON a bad
+    # weather day). The old longest-CONSECUTIVE-run rule released with 2 of 3
+    # days below ref (1.06 / 2.94 / 0.54 vs 2.222) because the good middle
+    # day broke the run; a fully clear window is now the only release.
     low_kwh: list[float] = []
     for d in window:
         rad = _num(d.get("radiation_sum_j"))
         ref = cfg.weather_min_j
         if ref is None or rad is None or rad < 0.0:
-            run = 0
             continue
         if rad < ref:
-            run += 1
-            best = max(best, run)
             low_kwh.append(rad / 3.6e6)            # J/m² → kWh/m² for humans
-        else:
-            run = 0
-    tier1_triggers = ([f"{best} of {len(window)} outlook days below the solar "
+    count = len(low_kwh)
+    tier1_triggers = ([f"{count} of {len(window)} outlook days below the solar "
                        f"reference ({'/'.join(f'{v:.1f}' for v in low_kwh[:4])}"
                        f" vs {cfg.weather_min_j / 3.6e6:.2f} kWh/m2)"]
-                      if best >= cfg.tier1_days else [])
+                      if count >= cfg.tier1_days else [])
     return max(50 if tier2_triggers else 0, 30 if tier1_triggers else 0), \
         tier2_triggers + tier1_triggers
 

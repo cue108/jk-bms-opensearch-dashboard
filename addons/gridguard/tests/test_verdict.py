@@ -155,17 +155,33 @@ def test_reserve_tier1_fires_on_two_consecutive_low_solar_days():
                          _day(date="2026-10-20", radiation_sum_j=15e6)], rc)[0] == 0
 
 
-def test_reserve_tier1_needs_at_least_two_consecutive_low_solar_days():
-    rc = replace(cfg, weather_min_j=15e6)
-    low, good = dict(radiation_sum_j=10e6), dict(radiation_sum_j=20e6)
-    # ONE low-solar day only → no tier
-    assert reserve_tier([_day(**low),
-                         _day(date="2026-10-20", **good),
-                         _day(date="2026-10-21", **good)], rc)[0] == 0
-    # two low days SPLIT by a good day are not CONSECUTIVE → no tier
-    assert reserve_tier([_day(**low),
-                         _day(date="2026-10-20", **good),
-                         _day(date="2026-10-21", **low)], rc)[0] == 0
+def test_reserve_tier1_holds_on_any_below_reference_day_in_the_window():
+    """OWNER RULING 2026-11-09 (bug order, the 00:09 release): "We cannot
+    leave the UPS mode on a bad weather day — it exists to bridge a possible
+    grid outage ON a bad weather day." The tier therefore COUNTS the
+    below-reference days ANYWHERE in the window (any bad day holds); the old
+    longest-CONSECUTIVE-run rule released at 00:09 with the real window
+    1.06 / 2.94 / 0.54 kWh/m² vs ref 2.222 — the good middle day broke the
+    run while two of three days stayed below reference."""
+    rc = replace(cfg, weather_min_j=2.222e6)
+    # the REAL 2026-11-09 00:09 outlook: bad / good / bad → MUST hold 30
+    tier, trig = reserve_tier(
+        [_day(radiation_sum_j=1.06e6),
+         _day(date="2026-11-10", radiation_sum_j=2.94e6),
+         _day(date="2026-11-11", radiation_sum_j=0.54e6)], rc)
+    assert tier == 30
+    assert any(t.startswith("2 of 3 outlook days below the solar reference")
+               for t in trig)
+    # ONE bad day alone already holds (the day an outage would hit)
+    assert reserve_tier([_day(radiation_sum_j=2.01e6),
+                         _day(date="2026-11-10", radiation_sum_j=2.94e6),
+                         _day(date="2026-11-11", radiation_sum_j=3.37e6)],
+                        rc)[0] == 30
+    # release ONLY with a fully clear window (every day at/above ref)
+    assert reserve_tier([_day(radiation_sum_j=2.94e6),
+                         _day(date="2026-11-10", radiation_sum_j=3.37e6),
+                         _day(date="2026-11-11", radiation_sum_j=2.50e6)],
+                        rc)[0] == 0
 
 
 @pytest.mark.parametrize("reference,rads", [
@@ -192,9 +208,10 @@ def test_reserve_tier2_outranks_tier1_max_wins():
 def test_reserve_tier_empty_or_short_outlook_is_zero():
     assert reserve_tier([], cfg) == (0, [])
     assert reserve_tier(None, cfg) == (0, [])
-    # short window: a single low-solar day cannot reach TIER1_DAYS=2
+    # a single below-ref day now HOLDS the mode (owner ruling 2026-11-09:
+    # any bad weather day in the window keeps the reserve)
     assert reserve_tier([_day(radiation_sum_j=10e6)],
-                           replace(cfg, weather_min_j=15e6))[0] == 0
+                           replace(cfg, weather_min_j=15e6))[0] == 30
     # junk/None entries are tolerated, never a guessed trigger
     assert reserve_tier([None, "garbage"], cfg)[0] == 0
 
