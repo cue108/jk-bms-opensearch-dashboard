@@ -315,15 +315,20 @@ function upsVocab(t){
   if(t===30) return {name:"Medium UPS mode"};
   if(t===50) return {name:"Strong UPS mode"};
   return null; }
-// release threshold (SOC %) from payload only: the matching hold's
-// backend-computed release_at_pct first, else tier + the event's own
-// release_hyst_pct (both payload operands) — otherwise null (no number)
+// release threshold (SOC %) from payload only, BOTH operands payload-carried:
+// tier + the NEWEST event's release_hyst_pct FIRST — the live gate reads the
+// configured hysteresis AT RELEASE TIME, so a hold line recorded under an
+// older band must not pin a stale number (owner band change 30/32 → 30/35,
+// 2026-11-09: the hold audit from 00:09 still said release_at 32 while the
+// gate in force releases at 35); else the matching hold's backend-computed
+// release_at_pct; otherwise null (no number, no frontend invention)
 function upsReleaseAt(t, evInputs, holdInputs){
+  const h=(evInputs||{}).release_hyst_pct;
+  if(typeof h==="number"&&typeof t==="number") return t+h;
   const hi=holdInputs||{};
   if(typeof hi.release_at_pct==="number" &&
      (hi.tier_pct==null||hi.tier_pct===t)) return hi.release_at_pct;
-  const h=(evInputs||{}).release_hyst_pct;
-  return (typeof h==="number"&&typeof t==="number") ? t+h : null; }
+  return null; }
 // effect sentence for a mode: tier number = payload tier_pct; the release
 // threshold only when the payload publishes it, else number-free wording
 function upsEffect(t, evInputs, holdInputs){
