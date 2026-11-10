@@ -1873,3 +1873,73 @@ def test_run_seeds_the_reserve_tier_before_the_first_decision_tick(monkeypatch):
     with pytest.raises(KeyboardInterrupt):
         main_mod.run(cfg)
     assert seen == {"seed": 1, "tick_pct": 30}          # seeded BEFORE any tick
+
+
+# --- owner bug wave 2026-11-10 (20:07 incident): the tier's drain-stop must be REAL --
+# Incident: SOC 25 % under an active tier 30 %, the eve decided bring_on_now and the
+# suppression vetoed it ("grid stays off") while the tick-path drain-stop never fired
+# either (wlan dongle down) — no switch, no timer, battery heading for empty before
+# sunrise (685 Wh left, reference need 790 Wh). Four root causes, four pins.
+
+def test_tier_stop_acts_even_without_actor_reach():
+    """F3: the drain-stop's act path is CLOUD-first (RealDeps.act: cloud.set_switch
+    -> LAN fallback -> honest NO CHANNEL / verify audits) — the wlan operstate gate
+    only blocked a viable cloud act (incident: dongle wlx… down, SOC 24 <= tier 30,
+    zero grid_on events all evening)."""
+    st = AppState(); st.reserve_tier_pct = 30
+    deps = FakeDeps(min_v=3.30, soc_pct=24.0, charge=-9.0, switch="off",
+                    inventory_timers=[], reachable_flag=False, buckets=[])
+    tick(cfg, st, deps, D(14, 0))
+    assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_on"]
+    on = [f for e, f in deps.audits if e == "grid_on"]
+    assert on and on[0]["inputs"] == {"soc": 24.0, "tier_pct": 30,
+                                      "ground": "tier"}
+    assert not any(e in ("emergency_on", "low_capacity_on") for e, _ in deps.audits)
+
+
+def test_eve_bring_on_not_suppressed_below_a_held_tier():
+    """F1: the anti-oscillation veto may only stand while the drain rule could
+    actually revert this ON THIS tick (contact + tier release gate open). Below a
+    held tier the release is gated (_tier_release_ok False) -> no fight -> the
+    eve's legitimate ON must execute (incident fixture: tier 30, SOC 24,
+    morning_done True, charge flat so the tick-stop is isolated out)."""
+    st = AppState(); st.morning_done = True; st.reserve_tier_pct = 30
+    deps = FakeDeps(min_v=3.30, soc_pct=24.0, charge=0.0, switch="off",
+                    inventory_timers=[], buckets=[])     # need unknown -> bring_on_now
+    tick(cfg, st, deps, D(20, 10))
+    assert not [f for e, f in deps.audits if e == "eve_bring_on_suppressed"]
+    assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_on"]
+    assert deps.pushes and deps.pushes[0][0] == "GRID ON"
+
+
+def test_eve_bring_on_failure_arms_the_device_timer_insurance():
+    """F4: an eve ON decision that could not be executed must never leave the
+    night bare (the incident's shape: vetoed -> NOTHING at all). The direct act
+    failing now arms the DEVICE-side timer (the §31 blackout insurance — fires
+    without WiFi) with the §27 truth fields, while the NO CHANNEL signal for the
+    failed direct attempt stays honest."""
+    st = AppState(); st.morning_done = True; st.reserve_tier_pct = 30
+    deps = FakeDeps(min_v=3.30, soc_pct=24.0, charge=0.0, switch="off",
+                    inventory_timers=[], buckets=[], fail_acts=True)
+    tick(cfg, st, deps, D(20, 10))
+    ins = [f for e, f in deps.audits if e == "eve_bring_on_timer_fallback"]
+    assert ins and ins[0]["result"] == "ok"
+    assert deps.plan_seen and deps.plan_seen[-1][0] == "failsafe_timer"
+    assert st.rescue_timer_set is True
+    assert st.last_planned_fire is not None and st.plan_ideal is not None
+    assert deps.pushes and deps.pushes[0][0] == "NO CHANNEL"   # direct failure still signals
+
+
+def test_reach_blocked_announces_while_the_grid_is_off():
+    """F5: the reach latch was gated to switch=="on" — an uplink outage while the
+    grid stayed OFF announced NOTHING (the incident's diagnosis gap: the dongle
+    died during the drain and no reach_blocked existed to explain the silent
+    tier-stop). The transition must announce regardless of the switch state."""
+    st = AppState()
+    deps = FakeDeps(min_v=3.30, soc_pct=80.0, switch="off",
+                    inventory_timers=[], reachable_flag=False, buckets=[])
+    tick(cfg, st, deps, D(10, 0))
+    tick(cfg, st, deps, D(10, 10))
+    rb = [f for e, f in deps.audits if e == "reach_blocked"]
+    assert rb and rb[0]["inputs"] == {"switch": "off"}          # ONCE, grid off too
+    assert not [e for e, _ in deps.audits if e == "reach_restored"]

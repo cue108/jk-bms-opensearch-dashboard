@@ -427,7 +427,11 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
     # rules hid a WHOLE morning (the host WLAN dongle vanished) — announce the
     # transition, guarded so a stuck outage audits exactly once.
     reach_ok = deps.reachable()
-    if reading is not None and switch_state == "on" and not reach_ok:
+    # owner bug 2026-11-10: the latch was gated to switch=="on" — an uplink
+    # outage while the grid stayed OFF announced NOTHING (the silent tier-stop
+    # of the 20:07 incident had no reach_blocked to explain it). Announce EVERY
+    # transition; the guard still makes it once per outage, not per tick.
+    if reading is not None and not reach_ok:
         if not st.reach_blocked:
             st.reach_blocked = True
             deps.audit("reach_blocked", inputs={"switch": switch_state})
@@ -506,7 +510,13 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
     # ingest sign positive = charging) below/at the tier stops the drain; a
     # charging or flat pack is left alone — the release gate keeps its hold and
     # the deep floors stay the safety net.
-    if (reading is not None and reach_ok and switch_state == "off"
+    # owner bug 2026-11-10 (20:07 incident): NO reach gate here — RealDeps.act
+    # is CLOUD-first (set_switch over eth0) with LAN fallback and self-honest
+    # failure audits (NO CHANNEL / verify_failed); the wlan operstate gate only
+    # blocked a viable cloud act: dongle wlx… down while SOC 24 <= tier 30 ->
+    # zero grid_on events all evening. A dead path still fails VISIBLY through
+    # act()'s own audits; the drain-stop intent is unconditional on contact.
+    if (reading is not None and switch_state == "off"
             and st.reserve_tier_pct > 0 and reading.soc is not None
             and reading.soc <= st.reserve_tier_pct
             and reading.charge_a is not None
@@ -906,6 +916,16 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
             # alternation); the night_need audit above still carries full fidelity.
             grid_off_fight = (reading is not None and not voltage_floor_hit(
                 reading.min_cell_v, reading.charge_a, cfg)) or st.morning_done
+            # owner bug 2026-11-10 (20:07 incident): the fight must be REAL —
+            # the drain rule can only revert this ON THIS tick when its release
+            # path is open: actor contact AND the tier release gate (soc >=
+            # tier + hyst). Below a held tier — or without contact — nothing
+            # would revert; vetoing here turned the tier's own drain-stop
+            # intent into NO ACTION (SOC 25 % vs tier 30 %, no timer armed).
+            if grid_off_fight and not (
+                    deps.reachable()
+                    and _tier_release_ok(cfg, st, deps, reading)):
+                grid_off_fight = False
             if grid_off_fight:
                 deps.audit("eve_bring_on_suppressed", inputs={
                     "reason": GRID_OFF_SUPPRESS_REASON,
@@ -928,6 +948,29 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                                                  sun_ok, sun_reason))
                 if ok:
                     st.last_observed_switch = "on"   # override recognition baseline
+                elif not st.rescue_timer_set and not any(
+                        is_rescue_timer(t) for t in timers):
+                    # owner bug 2026-11-10 (20:07 incident): an eve ON decision
+                    # that did not deliver must NEVER leave the night bare —
+                    # arm the DEVICE-side timer (§31 blackout insurance: fires
+                    # from the device clock without WiFi) + the §27 truth
+                    # fields; the failed direct attempt still signals itself
+                    # (act()'s NO CHANNEL / verify audit + the push below).
+                    _at = now + timedelta(minutes=2)
+                    _data = {"at_local": _at,
+                             "timer": build_on_timer(_at, cfg.tz),
+                             "fire_str": _at.strftime("%H:%M")}
+                    _ins = deps.apply_plan(
+                        TimerPlan(actions=[("failsafe_timer", _data)]))
+                    deps.audit("eve_bring_on_timer_fallback",
+                               result="ok" if _ins else "failed",
+                               inputs={"fire_str": _data["fire_str"],
+                                       "reason": "direct switch_on did not deliver"})
+                    if _ins:
+                        st.rescue_timer_set = True
+                        st.plan_ideal = _data["at_local"]        # §27 intent
+                        st.last_planned_fire = (_data.get("armed_local")
+                                                or _data["at_local"])  # device stamp wins
         elif kind == "failsafe_timer":
             verdict = EveVerdict.RESCUE_TIMER
             ok = deps.apply_plan(plan)           # the existing ensure-on programming path
