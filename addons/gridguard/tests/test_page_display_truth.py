@@ -50,12 +50,17 @@ def test_history_renders_plan_marks_and_measurement_derived_starts():
 
 
 def test_actor_reachability_line_on_the_first_card():
-    """Owner order 2026-11-12: the Grid state card carries the actor
-    reachability — True green (.ok), False amber (.bad), absent = the line
-    stays EMPTY (honest: never infer reachability)."""
+    """Owner REFINEMENT order 2026-11-12: the reachability sits at the BOTTOM
+    LEFT of the Grid state card as a small SENTENCE in standard color — ONLY
+    the state word is coloured ('actor is reachable' green / 'actor is
+    currently not reachable' amber); absent = nothing rendered (honest:
+    never infer reachability)."""
     assert 'id="hero-reach"' in PAGE                 # the card slot
+    assert 'class="card card-state"' in PAGE         # the positioning context
     assert "actor_reachable" in PAGE                 # the payload field read
-    assert 'actor reachable "' in PAGE               # the rendered label
-    assert 'AR?"True":"False"' in PAGE               # the owner's True/False words
-    assert ".hero-reach.ok" in PAGE and ".hero-reach.bad" in PAGE   # green / amber
+    assert "actor is currently " in PAGE             # the owner's False wording
+    assert ">reachable</span>" in PAGE               # ... coloured state words
+    assert ">not reachable</span>" in PAGE
+    assert ".hero-reach .st.ok" in PAGE and ".hero-reach .st.bad" in PAGE  # green / amber
+    assert "position:absolute" in PAGE and "bottom:12px" in PAGE           # bottom-left
     assert "AR===true" in PAGE                       # strict absence handling

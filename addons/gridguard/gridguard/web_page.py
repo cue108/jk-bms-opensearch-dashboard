@@ -127,11 +127,15 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   .hero-sub { font-size:15px; color:#e6edf3; margin-top:6px; }
   .hero-ev { font-size:13px; color:#8b949e; margin-top:4px;
              font-variant-numeric:tabular-nums; }
-  /* owner order 2026-11-12: actor reachability on the Grid state card —
-     True = green, False = amber, absent = the line stays EMPTY */
-  .hero-reach { font-size:13px; margin-top:4px; min-height:16px; }
-  .hero-reach.ok { color:#3fb950; font-weight:600; }
-  .hero-reach.bad { color:#d29922; font-weight:600; }
+  /* owner REFINEMENT order 2026-11-12: reachability = small sentence pinned
+     to the BOTTOM LEFT of the Grid state card — standard-color sentence,
+     ONLY the state word coloured (green reachable / amber not reachable) */
+  .card-state { position:relative; min-height:170px; }
+  .hero-reach { position:absolute; left:14px; bottom:12px;
+                font-size:12.5px; color:#8b949e; letter-spacing:.2px; }
+  .hero-reach .st { font-weight:600; }
+  .hero-reach .st.ok { color:#3fb950; }
+  .hero-reach .st.bad { color:#d29922; }
   .hero-next { font-size:13.5px; margin-top:9px; }
   .hero-next .chip { font-size:12.5px; padding:3px 11px; }
   #wx-body td:first-child { white-space:nowrap; }
@@ -161,7 +165,7 @@ PAGE = """<!DOCTYPE html><html><head><meta charset="utf-8">
   <button class="rf" style="margin-left:auto" onclick="load()">Refresh</button>
 </header>
 <div class="cards">
-  <div class="card">
+  <div class="card card-state">
     <h2>Grid state</h2>
     <div class="hero-state" id="hero-state">…</div>
     <div class="hero-sub" id="hero-sub"></div>
@@ -513,11 +517,13 @@ async function load(){
        Math.abs(amp)<=2.0?(heroOn?"battery idle — loads on grid (BMS evidence)":
                            "battery idle — no flow (full or no load)"):
        amp>0.4?"battery charging (solar)":"battery discharging");
-  // owner order 2026-11-12: actor reachability on the FIRST card — True
-  // green / False amber; absent (None) = EMPTY line, never inferred
+  // owner REFINEMENT order 2026-11-12: small sentence at the BOTTOM LEFT of
+  // the card — standard-color sentence, only the STATE word coloured
+  // (green reachable / amber not reachable); absent (None) = NOTHING
+  // rendered, never inferred
   const AR=D.actor_reachable, hr=$("hero-reach");
-  hr.textContent=(AR===true||AR===false)?"actor reachable "+(AR?"True":"False"):"";
-  hr.className="hero-reach "+(AR===true?"ok":(AR===false?"bad":""));
+  hr.innerHTML=AR===true?'<span>actor is </span><span class="st ok">reachable</span>':
+               AR===false?'<span>actor is currently </span><span class="st bad">not reachable</span>':"";
   // Actor plan card (owner redesign 2026-10-21/22 + display-truth doctrine
   // 2026-10-26): the ANNOUNCED grid-on = the LAST write-confirmed programming
   // (decision.announced_on_at — the ensure_on act's own fire_str, result ok;
