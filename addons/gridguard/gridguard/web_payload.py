@@ -908,6 +908,11 @@ def fetch_gridguard() -> dict:
         "grid_now": grid_now,
         "grid_since": grid_since.isoformat(timespec="minutes") if grid_since else None,
         "last_current_a": last_cur,
+        # owner order 2026-11-12: ACTOR REACHABILITY on the first card —
+        # filled by the dedicated newest-first reach query below; None =
+        # no transition in the journal = the page renders NOTHING (never
+        # inferred in either direction).
+        "actor_reachable": None,
         # owner's battery-capacity formula, LIVE from the newest BMS sample
         "battery_live": {"kwh": round(last_rem * last_pv / 1000.0, 3)
                          if last_rem is not None and last_pv is not None else None,
@@ -965,6 +970,20 @@ def fetch_gridguard() -> dict:
     decision["keep_grid_n"] = sum(
         1 for e in events if e.get("event") == "act"
         and (e.get("action") or {}).get("type") == "keep_grid")
+    # owner order 2026-11-12: ACTOR REACHABILITY — a DEDICATED newest-first
+    # query (the recent buffer ages out; F5 announces every transition once)
+    # so the latch state NEVER goes stale-silent on the page. reach_restored
+    # → True, reach_blocked → False, absence → None (honest nothing).
+    try:
+        r_hits = _gg_search(GG_EVENTS, {
+            "size": 1, "sort": [{"ts": "desc"}],
+            "query": {"terms": {"event": ["reach_blocked", "reach_restored"]}},
+            "_source": ["ts", "event"]}).get("hits", {}).get("hits", [])
+        r_ev = (r_hits[0].get("_source") or {}) if r_hits else {}
+        decision["actor_reachable"] = (None if r_ev.get("event") is None
+                                       else r_ev["event"] == "reach_restored")
+    except Exception:
+        decision["actor_reachable"] = None
     # ANNOUNCED (owner doctrine 2026-10-26): the write-confirmed program —
     # a DEDICATED newest-first cluster query (the recent buffer ages out
     # within hours — QA lesson 2026-10-21): act / failsafe_timer /

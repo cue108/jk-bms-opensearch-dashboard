@@ -60,6 +60,11 @@ def _router(req, timeout=None):
         _STUB["cancel_query"] = data.decode()
         c = _STUB.get("cancel")
         return _Resp({"hits": {"hits": [c] if c else []}})
+    if b"reach_blocked" in data and b"reach_restored" in data:
+        # owner order 2026-11-12: actor reachability (dedicated size-1 query)
+        _STUB["reach_query"] = data.decode()
+        r = _STUB.get("reach")
+        return _Resp({"hits": {"hits": [r] if r else []}})
     if b"keep_grid" in data:                  # the act-trail query (decision.acts)
         return _Resp({"hits": {"hits": _STUB.get("trail") or []}})
     if b"NACHTPLAN" in data:                  # push queries (evidence + plan ideal)
@@ -75,7 +80,8 @@ def _router(req, timeout=None):
 def payload_env(monkeypatch):
     _STUB.clear()
     _STUB.update(ann=None, trail=[], push=None, ann_query=None, gens=[],
-                 cancel=None, cancel_query=None, push_query=None)
+                 cancel=None, cancel_query=None, push_query=None,
+                 reach=None, reach_query=None)
     monkeypatch.setattr(wp, "TZ", "UTC")      # deterministic anchor math
     monkeypatch.setattr(wp, "OS", "http://stub:9200")
     monkeypatch.setattr(wp, "INDEX", "bms-test-*")
@@ -251,3 +257,33 @@ def test_a_failed_disarm_is_not_a_cancel(payload_env):
                                   result="failed")
     d = wp.fetch_gridguard()["decision"]
     assert d["announced_on_at"] == "11:38"
+
+
+# --- owner order 2026-11-12: actor reachability on the FIRST card -------------
+def test_actor_reachable_rides_the_newest_reach_transition(payload_env):
+    """The Grid state card shows the actor reachability (True green / False
+    amber) — sourced from the NEWEST reach transition via a dedicated
+    newest-first query: a latch state must never age out of any buffer (the
+    announced lesson), and F5 now announces every transition exactly once."""
+    _STUB["reach"] = {"_source": {"ts": "2026-11-12T09:10:13+00:00",
+                                  "event": "reach_restored"}}
+    d = wp.fetch_gridguard()["decision"]
+    assert d["actor_reachable"] is True
+    q = _STUB.get("reach_query") or ""
+    assert '"ts": "desc"' in q, q
+    assert "reach_blocked" in q and "reach_restored" in q, q
+
+
+def test_actor_reachable_false_after_a_blocked_transition(payload_env):
+    _STUB["reach"] = {"_source": {"ts": "2026-11-10T19:45:57+00:00",
+                                  "event": "reach_blocked"}}
+    d = wp.fetch_gridguard()["decision"]
+    assert d["actor_reachable"] is False
+
+
+def test_actor_reachable_absent_is_none_never_inferred(payload_env):
+    """Absence rule: no reach event in the journal → None → the page renders
+    NOTHING (the page never infers reachability in either direction)."""
+    _STUB["reach"] = None
+    d = wp.fetch_gridguard()["decision"]
+    assert d["actor_reachable"] is None
