@@ -563,3 +563,160 @@ def test_page_renders_the_reference_basis_next_to_the_crossing_time():
     # DISPLAY-TRUTH: the basis must be visible WHERE the crossing time shows
     # (the Actor-plan card's sub line carries the announced/plan ideal times).
     assert 'if(D.last_ref) $("ap-sub").textContent+=" · "+D.last_ref;' in PAGE
+
+
+# ---------------------------------------------------------------------------
+# Owner rules 2026-11-12 (the three-tier reference hierarchy): the value is a
+# RATE (Wh/h) for the timer projection ONLY. Tier1 = a WHOLE off-grid solar
+# night REPLACES the default (marginal accuracy edge); tier2 = the off-grid
+# window we have directly after sunset (ANY age — "wenn wir sieben Tage keinen
+# Wert mehr bekommen"); tier3 = HOLD the last journaled value until new data
+# arrives (never a static value: every new measurement replaces it = the value
+# WANDERS with the load profile). Grid-on nights learn NOTHING (the battery is
+# isolated from the loads).
+def _rate_series(rate_wh_h, start_day=18, end_day=31, v=52.0, switch_at=None,
+                 switch_rate=None):
+    """A discharge series at `rate_wh_h` (Wh/h) — optional rate switch at a
+    wall-clock instant (the existing `_series` fixture keeps its own name)."""
+    out, t = [], _at(start_day, 15, 0)
+    ah = 4000.0
+    while t <= _at(end_day, 8, 0):
+        out.append((t.replace(tzinfo=TZ), ah, v))
+        rate = (switch_rate if (switch_at is not None and t >= switch_at
+                                and switch_rate is not None) else rate_wh_h)
+        ah -= (rate / v) * (10.0 / 60.0)
+        t += timedelta(minutes=10)
+    return out
+
+
+def test_tier1_whole_off_grid_solar_night_replaces_the_default():
+    """Tier1: the full night's rate wins WITHIN the preference window — even
+    against a NEWER post-sunset partial (the owner's literal hierarchy: a
+    whole off-grid night, expressed in Wh/h anyway, REPLACES the default)."""
+    _need_reference_module()
+    s28, r29 = _at(28, 18, 30), _at(29, 7, 0)
+    s29, r30 = _at(29, 18, 30), _at(30, 7, 0)
+    now = _at(30, 9, 0)
+    offs = [
+        (_at(28, 17, 0).replace(tzinfo=TZ), _at(29, 7, 30).replace(tzinfo=TZ)),   # FULL night28
+        (_at(29, 18, 30).replace(tzinfo=TZ), _at(29, 20, 30).replace(tzinfo=TZ)),  # 2h partial (NEWER)
+    ]
+    nights = [(date(2026, 10, 29), s29, r30), (date(2026, 10, 28), s28, r29)]
+    ref = newest_reference(nights, offs, _rate_series(133.0,
+                                                      switch_at=_at(29, 18, 30),
+                                                      switch_rate=100.0),
+                           now=now, full_window_days=7)
+    assert ref is not None and ref["night"] == "2026-10-28"
+    assert ref["full"] is True
+    assert ref["wh_h"] == pytest.approx(133.0, abs=0.5)
+
+
+def test_tier2_post_sunset_window_carries_the_rate_at_any_age():
+    """Tier2: NO whole off-grid night in the window → the post-sunset window
+    we HAVE carries the rate, any age (winter), never a guess, never None."""
+    _need_reference_module()
+    s19, r20 = _at(19, 18, 30), _at(20, 7, 0)
+    now = _at(29, 9, 0)                          # the clip is TEN days old
+    offs = [(_at(19, 18, 30).replace(tzinfo=TZ),
+             _at(19, 20, 30).replace(tzinfo=TZ))]
+    ref = newest_reference([(date(2026, 10, 19), s19, r20)], offs,
+                           _rate_series(141.0, start_day=19, end_day=20),
+                           now=now, full_window_days=7)
+    assert ref is not None and ref["night"] == "2026-10-19"
+    assert ref["full"] is False
+    assert ref["wh_h"] == pytest.approx(141.0, abs=0.5)
+
+
+def test_tier3_holds_the_last_journaled_value_when_no_off_grid_data():
+    """Tier3: grid-ON nights (no off-window touches the solar night — the
+    battery is ISOLATED, owner rule) → nothing measurable anywhere → HOLD the
+    last journaled clip value until new data arrives (source 'held', the
+    provenance preserved)."""
+    _need_reference_module()
+
+    def sun(d):
+        return (datetime(d.year, d.month, d.day, 7, 0),
+                datetime(d.year, d.month, d.day, 18, 30))
+
+    history = [{"ts": "2026-09-20T06:10:00+00:00", "event": "reference_load",
+                "inputs": {"source": "clip", "night": "2026-09-20",
+                           "wh": 1300.0, "wh_h": 130.0, "clips": [],
+                           "min_clip_min": 30}}]
+    ref = build_reference(sun_times_fn=sun, events_fn=lambda since: [],
+                          series_fn=lambda a, b: [],
+                          now=datetime(2026, 10, 29, 9, 0), tz=TZ,
+                          n_nights=5, history_fn=lambda: history)
+    assert ref is not None and ref["source"] == "held"
+    assert ref["wh_h"] == 130.0 and ref["night"] == "2026-09-20"
+
+
+def test_grid_on_nights_yield_no_rate_even_when_older_data_exists():
+    """Owner rule: grid-ON = the battery is isolated from the loads → NO
+    measurable value from those nights (they never win, never fall back to
+    a median of nothing) — the held/None tiers decide instead."""
+    _need_reference_module()
+    offs = [(_at(18, 17, 0).replace(tzinfo=TZ), _at(19, 7, 30).replace(tzinfo=TZ))]
+    # the candidate night is grid-ON (its window does NOT touch the off-span)
+    s25, r26 = _at(25, 18, 30), _at(26, 7, 0)
+    ref = newest_reference([(date(2026, 10, 25), s25, r26)], offs,
+                           _rate_series(133.0, start_day=18, end_day=26),
+                           now=_at(29, 9, 0), full_window_days=7)
+    assert ref is None
+
+
+def test_payload_last_ref_line_names_the_full_solar_night(payload_env):
+    _STUB["ref_event"] = {"ts": "2026-10-30T06:05:00+00:00",
+                          "event": "reference_load",
+                          "inputs": {"source": "clip", "full": True,
+                                     "night": "2026-10-29",
+                                     "wh_h": 133.0, "wh": 1294.5,
+                                     "clips": [], "min_clip_min": 30}}
+    line = wp.fetch_gridguard()["decision"]["last_ref"]
+    assert line == "last_ref: Thu 29 Oct full night · 133 Wh/h"
+    assert len(line) <= 60
+
+
+def test_payload_last_ref_line_names_the_held_reference(payload_env):
+    _STUB["ref_event"] = {"ts": "2026-10-30T06:05:00+00:00",
+                          "event": "reference_load",
+                          "inputs": {"source": "held", "night": "2026-09-20",
+                                     "wh_h": 130.0, "wh": 1294.5,
+                                     "clips": [], "min_clip_min": 30}}
+    line = wp.fetch_gridguard()["decision"]["last_ref"]
+    assert line == "last_ref: held from Sun 20 Sep · 130 Wh/h"
+    assert len(line) <= 60
+
+
+def test_tier1_full_night_at_the_seven_day_boundary_beats_newer_partial():
+    """THE BOUNDARY (owner rule: "wenn wir sieben Tage keinen Wert mehr
+    bekommen haben…" → day 7 INCLUSIVE): a WHOLE off-grid solar night exactly
+    `n_nights` days before `now` must still win over a newer post-sunset
+    partial. The date walk has to include `today - n_nights` (the running
+    night eats one slot otherwise — live find 2026-11-12: the 7-day-old full
+    Nov5 night fell just outside block0 and a 2-day-old partial won)."""
+    _need_reference_module()
+    # NOTE: pre-Oct25 nights are CEST (+02:00), after the switch CET (+01:00).
+    events = [
+        {"ts": "2026-10-23T17:00:00+02:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_off"}, "inputs": {}},        # off BEFORE sunset
+        {"ts": "2026-10-24T07:30:00+02:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_on"}, "inputs": {}},         # on AFTER sunrise
+        {"ts": "2026-10-28T18:30:00+01:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_off"}, "inputs": {}},        # partial, 2 days old
+        {"ts": "2026-10-28T20:30:00+01:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_on"}, "inputs": {}},
+    ]
+    series = _rate_series(150.0, start_day=22, end_day=30,
+                          switch_at=_at(28, 18, 30), switch_rate=111.0)
+
+    def sun(d):
+        return (datetime(d.year, d.month, d.day, 7, 0),
+                datetime(d.year, d.month, d.day, 18, 30))
+
+    ref = build_reference(sun_times_fn=sun, events_fn=lambda since: events,
+                          series_fn=lambda a, b: series,
+                          now=datetime(2026, 10, 30, 9, 0), tz=TZ, n_nights=7)
+    assert ref is not None
+    assert ref["night"] == "2026-10-23"        # exactly day 7 → tier1, inclusive
+    assert ref["full"] is True
+    assert ref["wh_h"] == pytest.approx(150.0, abs=1.0)

@@ -34,10 +34,12 @@ FLOOR_WH = FLOOR_PCT / 100.0 * 200.0 * 25.6               # 76,8 Wh @ _plan defa
 
 
 def _plan(available=1000.0, need=800.0, switch="off", night_len=NIGHT_LEN, c=cfg,
-          forecast_ok=True, pack_v=25.6, full_ah=200.0):  # True = the ratio cases isolate the ONE ratio rule;
+          forecast_ok=True, pack_v=25.6, full_ah=200.0,
+          load_wh_h=None):          # True = the ratio cases isolate the ONE ratio rule;
     return plan_evening(NOW, available_wh=available, need_wh=need,   # the sun gate gets its own tests
                         switch_state=switch, night_len_hours=night_len, cfg=c,
-                        forecast_ok=forecast_ok, pack_v=pack_v, full_ah=full_ah)
+                        forecast_ok=forecast_ok, pack_v=pack_v, full_ah=full_ah,
+                        load_wh_h=load_wh_h)
 
 
 def test_failsafe_without_pack_voltage_is_not_guessed():
@@ -252,3 +254,27 @@ def test_reserve_floor_none_or_zero_keeps_the_voltage_floor():
     for kw in ({}, {"reserve_floor_pct": None}, {"reserve_floor_pct": 0}):
         plan = _tier_plan(**kw)
         assert plan.actions[0][1]["at_local"] == base.actions[0][1]["at_local"]
+
+
+# --- owner physics ruling 2026-11-12 (21:33 incident) ----------------------
+def test_crossing_programmed_from_the_reference_rate_when_clean_need_unknown():
+    """21:33 incident: NO CLEAN night → need=None, but the reference RATE
+    (load_wh_h = the post-sunset grid-off clip mean Wh/h, Phase A) IS a need
+    basis — the evening gate must program its PROJECTED crossing into the
+    actor (the existing t_fire = now + head/rate mechanism), never the
+    conservative bring_on_now that the grid-off rule then suppresses to
+    NOTHING (the incident: suppressed every eve tick, NO timer programmed,
+    battery bleeding toward the floor with nothing armed)."""
+    plan = _plan(available=190.0, need=None, switch="off", load_wh_h=100.0)
+    assert kinds(plan) == ["failsafe_timer"]
+    on = plan.actions[0][1]
+    dt_h = (190.0 - FLOOR_WH) / (100.0 * cfg.safety_factor)   # rate = load × safety
+    assert on["at_local"] == NOW + timedelta(hours=dt_h)
+    assert on["fire_str"] == on["at_local"].strftime("%H:%M")
+
+
+def test_conservative_branch_when_neither_need_nor_rate_is_known():
+    """The unknown-UNKNOWN case keeps the conservative ON (no invented
+    number): need AND load_wh_h both absent → bring_on_now exactly as
+    before — the boundary the incident fix must not blur."""
+    assert kinds(_plan(available=190.0, need=None, switch="off")) == ["bring_on_now"]

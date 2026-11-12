@@ -882,7 +882,7 @@ def fetch_gridguard() -> dict:
     # renders nothing the journal cannot evidence — absence rule).
     rl_in = (plan.get("reference_load") or {}).get("inputs") or {}
     last_ref = None
-    if str(rl_in.get("source")) == "clip" \
+    if str(rl_in.get("source")) in ("clip", "held") \
             and isinstance(rl_in.get("night"), str) \
             and isinstance(rl_in.get("wh_h"), (int, float)):
         try:
@@ -890,7 +890,16 @@ def fetch_gridguard() -> dict:
             _label = f"{_WD[_rd.weekday()]} {_rd.day} {_MO[_rd.month - 1]}"
         except ValueError:
             _label = rl_in["night"][:12]
-        last_ref = f"last_ref: {_label} clip · {rl_in['wh_h']:.0f} Wh/h"
+        # owner rules 2026-11-12: RATE-first naming of the THREE tiers —
+        # "full night" (tier1) / "clip" (tier2) / "held" (tier3, the last
+        # value kept until new data arrives). The raw Wh of a fragment must
+        # never render as "the night" (the projection only ever uses Wh/h).
+        if str(rl_in.get("source")) == "held":
+            last_ref = f"last_ref: held from {_label} · {rl_in['wh_h']:.0f} Wh/h"
+        elif rl_in.get("full"):
+            last_ref = f"last_ref: {_label} full night · {rl_in['wh_h']:.0f} Wh/h"
+        else:
+            last_ref = f"last_ref: {_label} clip · {rl_in['wh_h']:.0f} Wh/h"
     elif str(rl_in.get("source")) == "median_fallback":
         _rate = nni.get("crossing_rate_wh_h")
         last_ref = (f"last_ref: median-fallback ({_rate:.0f} Wh/h)"

@@ -571,6 +571,20 @@ class BmsSource:
         resp = self._search(body, self.os_url, self.events_index, self.timeout)
         return [h["_source"] for h in resp.get("hits", {}).get("hits", [])]
 
+    def reference_history(self, size: int = 3) -> list[dict]:
+        """Owner's THREE-TIER reference (rules 2026-11-12, tier3): the newest
+        `size` reference_load audit events ({ts, inputs}) — the HOLD memory
+        for when no fresh off-grid data exists (the last clip value stays the
+        reference until new data arrives; the value wanders with every new
+        measurement). Same bounded newest-of-kind query as yield_history
+        (Aggregations-Doctrine: no scan); raises BmsError on cluster failure
+        — the caller nets it to the honest None."""
+        body = {"size": size, "sort": [{"ts": "desc"}],
+                "query": {"term": {"event": "reference_load"}},
+                "_source": ["ts", "inputs"]}
+        resp = self._search(body, self.os_url, self.events_index, self.timeout)
+        return [h["_source"] for h in resp.get("hits", {}).get("hits", [])]
+
     def counter_series(self, start: datetime, end: datetime) -> list:
         """Owner REFERENCE-LOAD model (Phase A): per-minute BMS counter docs
         `(ts aware, remaining_ah, pack voltage)` over [start, end] — the clip

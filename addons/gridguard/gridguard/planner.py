@@ -194,7 +194,18 @@ def plan_evening(now: datetime, available_wh: float | None,
     # via max()) — shared with the overnight re-estimation; unknown factor →
     # None → the conservative branch below (no guessed floor, no TypeError).
     floor_wh = night_floor_wh(cfg, full_ah, pack_v, reserve_floor_pct)
-    if (need_wh is None or available_wh is None or pack_v is None
+    # owner ruling 2026-11-12 (21:33 incident): the REFERENCE RATE (load_wh_h,
+    # the post-sunset grid-off clip mean Wh/h) IS a need basis — the rate law
+    # below already projects it (rate = load × safety → t_fire → the actor-
+    # programmed crossing, the evening gate's own mechanism). Exiting on
+    # need_wh=None ALONE threw the measured load away: with no clean night
+    # (need=None) the plan fell to the conservative bring_on_now, the grid-off
+    # rule suppressed that to NOTHING and NO timer was programmed — the
+    # battery bled toward the floor with nothing armed. Conservative branch
+    # only when NEITHER basis exists (need AND rate unknown, non-positive
+    # rate proves nothing); everything else keeps its old behavior.
+    if ((need_wh is None and (load_wh_h is None or load_wh_h <= 0))
+            or available_wh is None or pack_v is None
             or floor_wh is None):
         if switch_state == "on":
             return TimerPlan(actions=[("keep_grid",

@@ -1410,7 +1410,11 @@ class RealDeps:
                 series_fn=lambda a, b: self.bms.counter_series(a, b),
                 now=datetime.now(self.cfg.tz), tz=self.cfg.tz,
                 n_nights=self.cfg.reference_nights,
-                min_clip_min=float(self.cfg.reference_min_clip_min))
+                min_clip_min=float(self.cfg.reference_min_clip_min),
+                # three-tier rules (owner 2026-11-12): the deep tier2 walk +
+                # tier3 HOLD memory (the newest journaled clip reference)
+                history_fn=lambda: self.bms.reference_history(),
+                max_lookback_days=self.cfg.reference_max_lookback_days)
         except Exception:                  # noqa: BLE001 — consult side rule2026-10-23
             ref = None                     # ANY failure = honest median fallback
         self.audit("reference_load", inputs=reference_audit_inputs(ref))

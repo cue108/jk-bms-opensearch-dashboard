@@ -16,11 +16,21 @@ laboratory conditions:
 * segment energy = (Ah_start − Ah_end) × the segment's mean pack V — the BMS
   per-minute counter, unit Wh/h is explicitly sanctioned;
 * each clip must be >= `min_clip_min` (default 30 min); a night's load =
-  ΣWh ÷ Σhours over ITS qualifying clips; the NEWEST night with at least one
-  qualifying clip WINS. A still-running night (sunrise ahead) is never a
-  candidate — the reference is always a COMPLETED night;
-* nothing qualifies → return None: the caller keeps the old median method and
-  the audit event carries `source: "median_fallback"` (the fallback marker).
+  ΣWh ÷ Σhours over ITS qualifying clips. A still-running night (sunrise
+  ahead) is never a candidate — the reference is always a COMPLETED night;
+* OWNER RULES 2026-11-12 (the THREE-TIER hierarchy; always a RATE Wh/h,
+  consulted ONLY for the timer projection):
+  tier1 = the NEWEST WHOLE off-grid solar night (grid-off covers
+    [sunset, sunrise] exactly) inside the preference window — its marginal
+    accuracy edge REPLACES the default;
+  tier2 = the newest post-sunset grid-off clip at ANY AGE (the winter rule:
+    no value for seven days → "the off-grid night we have directly after
+    sunset");
+  tier3 = HOLD the last journaled clip value until new data arrives (the
+    value WANDERS — every new measurement replaces it; grid-on nights learn
+    NOTHING: the battery is isolated from the loads, no median of nothing);
+* nothing of any tier and no history → return None: the caller keeps the old
+  median method and the audit event carries `source: "median_fallback"`.
 
 Every evaluation is audited by the caller (RealDeps.reference_load) as the
 event class `reference_load` with the inputs built by `audit_inputs` — the
@@ -163,78 +173,175 @@ def _night_clips(sunset: datetime, sunrise: datetime, off_windows, samples,
     return clips
 
 
+def _covers_night(sunset: datetime, sunrise: datetime, off_windows, tz) -> bool:
+    """TIER1 classifier (owner rules 2026-11-12): does the KNOWN grid-OFF
+    timeline cover the WHOLE solar night [sunset, sunrise] without a gap?
+    Any gap = grid-ON or UNKNOWN state inside the night → not a whole
+    off-grid night (grid-on learns nothing: the battery is isolated from the
+    loads; unknown earns no claim)."""
+    segs = sorted((max(_aware(a, tz), sunset), min(_aware(b, tz), sunrise))
+                  for a, b in off_windows)
+    segs = [(a, b) for a, b in segs if b > a]
+    if not segs:
+        return False
+    cur = sunset
+    for a, b in segs:
+        if a > cur:
+            return False                      # gap = ON/unknown inside the night
+        cur = max(cur, b)
+        if cur >= sunrise:
+            return True
+    return cur >= sunrise
+
+
 def newest_reference(nights, off_windows, samples, *, now=None,
-                     min_clip_min: float = 30.0) -> dict | None:
-    """NEWEST qualifying calendar night wins (nights = newest-first list of
-    `(date, sunset, sunrise)`). A night whose sunrise is still ahead of `now`
-    is RUNNING and never qualifies; a night without a qualifying clip falls
-    through to the older ones. None = nothing usable → median fallback."""
+                     min_clip_min: float = 30.0,
+                     full_window_days: int | None = None) -> dict | None:
+    """THE TIERED pick (owner rules 2026-11-12). `nights` = newest-first
+    `(date, sunset, sunrise)` — one block at a time: tier1 = the NEWEST night
+    whose grid-off covers the WHOLE solar night while it lies inside the
+    preference window (`full_window_days`; None = any age) — the accuracy
+    edge that REPLACES the default; else tier2 = the NEWEST night with a
+    qualifying post-sunset clip (any age). Running nights never qualify;
+    None = nothing here (the caller walks deeper, then holds the last value)."""
     if not nights or not off_windows:
         return None
     tz = off_windows[0][0].tzinfo
     norm = sorted((_aware(ts, tz), ah, v) for ts, ah, v in (samples or []))
     now_a = _aware(now, tz) if now is not None else None
+    window0 = None if full_window_days is None else (
+        now_a.date() - timedelta(days=int(full_window_days)))
+    first_full = first_partial = None
     for night_date, sunset, sunrise in nights:
         s0, r0 = _aware(sunset, tz), _aware(sunrise, tz)
         if now_a is not None and r0 > now_a:
             continue                          # still running → not POSSIBLE yet
         clips = _night_clips(s0, r0, off_windows, norm, min_clip_min)
         if not clips:
-            continue                          # no qualifying clip → older night
+            continue                          # nothing measurable this night
         wh = round(sum(c["wh"] for c in clips), 1)
         hours = sum(c["hours"] for c in clips)
         if hours <= 0:
             continue
-        return {"night": (night_date.date() if isinstance(night_date, datetime)
-                          else night_date).isoformat(),
-                "source": "clip", "clips": clips, "wh": wh,
-                "wh_h": round(wh / hours, 1), "min_clip_min": min_clip_min}
-    return None
+        nd = (night_date.date() if isinstance(night_date, datetime)
+              else night_date)
+        entry = {"night": nd.isoformat(), "source": "clip", "clips": clips,
+                 "wh": wh, "wh_h": round(wh / hours, 1),
+                 "min_clip_min": min_clip_min}
+        is_full = _covers_night(s0, r0, off_windows, tz)
+        entry["full"] = is_full               # tier1 disclosure (audit: truthy only)
+        if is_full and first_full is None \
+                and (window0 is None or nd >= window0):
+            first_full = entry
+        if first_partial is None:
+            first_partial = entry
+    return first_full if first_full is not None else first_partial
 
 
 def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
-                   n_nights: int = 5, min_clip_min: float = 30.0) -> dict | None:
-    """Evaluate the last `n_nights` CALENDAR nights, newest first.
+                   n_nights: int = 7, min_clip_min: float = 30.0,
+                   history_fn=None,
+                   max_lookback_days: int = 365) -> dict | None:
+    """THE THREE-TIER reference (owner rules 2026-11-12) — always a RATE
+    (Wh/h), consulted ONLY for the timer projection.
 
-    The three sources are the EXISTING ones, injected as callables so the
-    pure logic above stays testable: `sun_times_fn(date) -> (rise, set)` (the
-    weather client path deps already uses), `events_fn(since) -> events` (the
-    addon's own journal) and `series_fn(start, end) -> [(ts, remaining_ah, V)]`
-    (the BMS counter). Any source returning nothing simply yields no clips —
-    honest None, never a guessed load."""
+    Blocks of `n_nights` calendar nights, newest first: block0 = the tier1
+    preference window (a WHOLE off-grid solar night wins there over any newer
+    partial — the owner's seven-day rule); deeper blocks = tier2 (post-sunset
+    clips at ANY age, bounded by `max_lookback_days`). The switch acts are
+    fetched FIRST per block — a span without a single `switch_off` seed cannot
+    produce any window, so its sun/counter consults are skipped (the deep walk
+    stays cheap); sun times are memoized per evaluation (astronomy is constant
+    per date). NOTHING found in the whole walk → tier3: `history_fn()` = the
+    newest journaled clip reference, returned as `source: "held"` until new
+    data arrives (the value wanders — every fresh measurement replaces it).
+    None only without history_fn/any history — the caller keeps the old
+    median method (the `median_fallback` audit marker)."""
     now_a = _aware(now, tz)
-    nights: list[tuple[date, datetime, datetime]] = []
-    for i in range(max(1, int(n_nights))):
-        d = now_a.date() - timedelta(days=i)
+    step = max(1, int(n_nights))
+    # +1 = the window EDGE date: the night whose SUNSET sits exactly
+    # `n_nights` days back must still be evaluated — day 7 is INCLUSIVE in
+    # the owner's rule ("wenn wir sieben Tage keinen Wert mehr bekommen
+    # haben") and the currently-RUNNING night eats one slot otherwise
+    # (live find 2026-11-12: the day-7 full night fell just outside the
+    # block and a day-2 partial won).
+    total = max(int(n_nights), int(max_lookback_days)) + 1
+    _sun_memo: dict = {}
+
+    def _sun(d):
+        if d not in _sun_memo:
+            _sun_memo[d] = sun_times_fn(d)
+        return _sun_memo[d]
+
+    block_start, block_no = 0, 0
+    while block_start < total:
+        is_first = (block_no == 0)
+        count = (step + 1) if is_first else step
+        block_no += 1
+        dates = [now_a.date() - timedelta(days=i)
+                 for i in range(block_start,
+                                min(block_start + count, total))]
+        block_start += count
+        if not dates:
+            break
+        # acts first (one bounded query): no switch_off in the span → no
+        # window can exist there — skip the sun/counter consults entirely
+        probe_start = (datetime(min(dates).year, min(dates).month, min(dates).day)
+                       - timedelta(hours=40))
         try:
-            s_rise, s_set = sun_times_fn(d)
-            n_rise, _ = sun_times_fn(d + timedelta(days=1))
+            events = events_fn(_aware(probe_start, tz))
         except Exception:                     # noqa: BLE001 — consult-side rule
-            continue
-        if s_set is None or n_rise is None:
-            continue                          # weather unknown → no window
-        sunset, sunrise = _aware(s_set, tz), _aware(n_rise, tz)
-        if sunrise <= sunset:
-            continue
-        nights.append((d, sunset, sunrise))
-    if not nights:
+            events = []
+        if not any((e.get("action") or {}).get("type") == "switch_off"
+                   for e in events if isinstance(e, dict)):
+            continue                          # no OFF seed → nothing measurable here
+        nights = []
+        for d in dates:
+            try:
+                s_rise, s_set = _sun(d)
+                n_rise, _ = _sun(d + timedelta(days=1))
+            except Exception:                 # noqa: BLE001
+                continue
+            if s_set is None or n_rise is None:
+                continue                      # weather unknown → no window
+            sunset, sunrise = _aware(s_set, tz), _aware(n_rise, tz)
+            if sunrise <= sunset:
+                continue
+            nights.append((d, sunset, sunrise))
+        if not nights:
+            continue                          # a sunless block must not hide older ones
+        horizon_start = min(n[1] for n in nights) - timedelta(hours=36)
+        try:
+            series = series_fn(min(n[1] for n in nights), now_a)
+        except Exception:                     # noqa: BLE001
+            series = []
+        offs = grid_off_windows(events, horizon_start, now_a, tz)
+        ref = newest_reference(nights, offs, series, now=now_a,
+                               min_clip_min=min_clip_min,
+                               full_window_days=(int(n_nights)
+                                                 if is_first else 0))
+        if ref is not None:
+            return ref
+    # --- tier3: HOLD the last journaled clip value until new data arrives ---
+    if history_fn is None:
         return None
-    # seed slack: the OFF-establishing act may predate the oldest sunset by a
-    # whole day-part (the morning grid-off, or the PREVIOUS evening's eve release
-    # that kept the grid off) — 36 h covers that chain; window clipping below
-    # keeps the result inside the nights regardless
-    horizon_start = min(n[1] for n in nights) - timedelta(hours=36)
     try:
-        events = events_fn(horizon_start)
-    except Exception:                         # noqa: BLE001
-        events = []
-    try:
-        series = series_fn(min(n[1] for n in nights), now_a)
-    except Exception:                         # noqa: BLE001
-        series = []
-    offs = grid_off_windows(events, horizon_start, now_a, tz)
-    return newest_reference(nights, offs, series, now=now_a,
-                            min_clip_min=min_clip_min)
+        hist = history_fn() or []
+    except Exception:                         # noqa: BLE001 — consult-side rule
+        return None
+    for ev in hist:
+        if not isinstance(ev, dict):
+            continue
+        inputs = ev.get("inputs") or {}
+        if str(inputs.get("source")) == "clip" \
+                and isinstance(inputs.get("night"), str) \
+                and isinstance(inputs.get("wh_h"), (int, float)) \
+                and inputs.get("wh_h", 0) > 0:
+            held = dict(inputs)
+            held["source"] = "held"
+            held["held_ts"] = ev.get("ts")
+            return held
+    return None
 
 
 def audit_inputs(ref: dict | None) -> dict:
@@ -244,6 +351,11 @@ def audit_inputs(ref: dict | None) -> dict:
     keeps the old median method)."""
     if not isinstance(ref, dict):
         return {"source": "median_fallback"}
-    return {"source": ref.get("source") or "none", "night": ref.get("night"),
-            "clips": ref.get("clips") or [], "wh": ref.get("wh"),
-            "wh_h": ref.get("wh_h"), "min_clip_min": ref.get("min_clip_min")}
+    out = {"source": ref.get("source") or "none", "night": ref.get("night"),
+           "clips": ref.get("clips") or [], "wh": ref.get("wh"),
+           "wh_h": ref.get("wh_h"), "min_clip_min": ref.get("min_clip_min")}
+    if ref.get("full"):                       # tier1 disclosure (partial = absent)
+        out["full"] = True
+    if ref.get("held_ts"):                    # tier3 provenance (the held event)
+        out["held_ts"] = ref["held_ts"]
+    return out

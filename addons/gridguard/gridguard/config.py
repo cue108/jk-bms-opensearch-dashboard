@@ -102,13 +102,18 @@ class Config:
                                     # integer-SOC plateau (write churn); POLICY,
                                     # env-tunable, 0 = literal exact reach
 
-    # --- owner REFERENCE-LOAD model (Phase A, 2026-10-30): calendar-night grid-OFF
-    # clip load as the crossing's rate basis. Both are POLICY knobs (env):
-    # reference_nights = how many COMPLETED calendar nights are evaluated
-    # (newest first); reference_min_clip_min = the minimum qualifying grid-OFF
-    # clip length (a shorter segment proves nothing about the house load).
-    reference_nights: int = 5
+    # --- owner REFERENCE-LOAD model (Phase A2026-10-30; THREE-TIER rules
+    # 2026-11-12): a RATE (Wh/h) used only for the timer projection.
+    # reference_nights = the tier1 PREFERENCE WINDOW (a whole off-grid solar
+    # night wins within these days — the owner's seven-day rule) AND the deep
+    # walk's block size; reference_min_clip_min = the minimum qualifying
+    # grid-OFF clip length; reference_max_lookback_days = the age-unlimited
+    # tier2 search bound (winter: older post-sunset values still count — the
+    # value wanders with every new measurement, is never static, and tier3
+    # holds the last one until new data arrives).
+    reference_nights: int = 7
     reference_min_clip_min: int = 30
+    reference_max_lookback_days: int = 365
 
     @property
     def tz_name(self) -> str:
@@ -208,7 +213,9 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         tier_lookahead_days=int(e.get("TIER_LOOKAHEAD_DAYS", "3")),
         # owner 2026-11-09: band 30/35 (was 30/32) — release needs tier + 5
         tier_release_hyst_pct=int(e.get("TIER_RELEASE_HYST_PCT", "5")),
-        # reference-load model (Phase A): newest-first night window + clip floor
-        reference_nights=int(e.get("REF_NIGHTS", "5")),
+        # reference-load model (Phase A + tier rules 2026-11-12): tier1
+        # preference window (= block size) + clip floor + the deep tier2 cap
+        reference_nights=int(e.get("REF_NIGHTS", "7")),
         reference_min_clip_min=int(e.get("REF_MIN_CLIP_MIN", "30")),
+        reference_max_lookback_days=int(e.get("REF_MAX_LOOKBACK_DAYS", "365")),
     )
