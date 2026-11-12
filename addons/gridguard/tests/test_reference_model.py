@@ -590,9 +590,10 @@ def _rate_series(rate_wh_h, start_day=18, end_day=31, v=52.0, switch_at=None,
 
 
 def test_tier1_whole_off_grid_solar_night_replaces_the_default():
-    """Tier1: the full night's rate wins WITHIN the preference window — even
-    against a NEWER post-sunset partial (the owner's literal hierarchy: a
-    whole off-grid night, expressed in Wh/h anyway, REPLACES the default)."""
+    """The HOURS-RANKED pick (owner ruling 2026-11-12, 23:3x): the night with
+    the MOST grid-off hours inside the astronomical night wins — here the
+    12.5 h whole night beats the NEWER2 h post-sunset partial (the whole
+    night is just the max-hours case, not a separate class)."""
     _need_reference_module()
     s28, r29 = _at(28, 18, 30), _at(29, 7, 0)
     s29, r30 = _at(29, 18, 30), _at(30, 7, 0)
@@ -605,15 +606,16 @@ def test_tier1_whole_off_grid_solar_night_replaces_the_default():
     ref = newest_reference(nights, offs, _rate_series(133.0,
                                                       switch_at=_at(29, 18, 30),
                                                       switch_rate=100.0),
-                           now=now, full_window_days=7)
+                           now=now)
     assert ref is not None and ref["night"] == "2026-10-28"
     assert ref["full"] is True
     assert ref["wh_h"] == pytest.approx(133.0, abs=0.5)
 
 
 def test_tier2_post_sunset_window_carries_the_rate_at_any_age():
-    """Tier2: NO whole off-grid night in the window → the post-sunset window
-    we HAVE carries the rate, any age (winter), never a guess, never None."""
+    """The window's hours-ranking with a single candidate: the post-sunset
+    window we HAVE carries the rate — ANY age (winter), never a guess,
+    never None."""
     _need_reference_module()
     s19, r20 = _at(19, 18, 30), _at(20, 7, 0)
     now = _at(29, 9, 0)                          # the clip is TEN days old
@@ -621,7 +623,7 @@ def test_tier2_post_sunset_window_carries_the_rate_at_any_age():
              _at(19, 20, 30).replace(tzinfo=TZ))]
     ref = newest_reference([(date(2026, 10, 19), s19, r20)], offs,
                            _rate_series(141.0, start_day=19, end_day=20),
-                           now=now, full_window_days=7)
+                           now=now)
     assert ref is not None and ref["night"] == "2026-10-19"
     assert ref["full"] is False
     assert ref["wh_h"] == pytest.approx(141.0, abs=0.5)
@@ -660,7 +662,7 @@ def test_grid_on_nights_yield_no_rate_even_when_older_data_exists():
     s25, r26 = _at(25, 18, 30), _at(26, 7, 0)
     ref = newest_reference([(date(2026, 10, 25), s25, r26)], offs,
                            _rate_series(133.0, start_day=18, end_day=26),
-                           now=_at(29, 9, 0), full_window_days=7)
+                           now=_at(29, 9, 0))
     assert ref is None
 
 
@@ -689,11 +691,12 @@ def test_payload_last_ref_line_names_the_held_reference(payload_env):
 
 def test_tier1_full_night_at_the_seven_day_boundary_beats_newer_partial():
     """THE BOUNDARY (owner rule: "wenn wir sieben Tage keinen Wert mehr
-    bekommen haben…" → day 7 INCLUSIVE): a WHOLE off-grid solar night exactly
-    `n_nights` days before `now` must still win over a newer post-sunset
-    partial. The date walk has to include `today - n_nights` (the running
-    night eats one slot otherwise — live find 2026-11-12: the 7-day-old full
-    Nov5 night fell just outside block0 and a 2-day-old partial won)."""
+    bekommen haben…" → day 7 INCLUSIVE): the night exactly `n_nights` days
+    before `now` must still be EVALUATED — its hours (12.5 h vs 2.0 h) decide
+    under the 23:3x hours-ranking. The date walk has to include
+    `today - n_nights` (the running night eats one slot otherwise — live find
+    2026-11-12: the day-7 night fell just outside block0 and a day-2 partial
+    won)."""
     _need_reference_module()
     # NOTE: pre-Oct25 nights are CEST (+02:00), after the switch CET (+01:00).
     events = [
@@ -719,4 +722,41 @@ def test_tier1_full_night_at_the_seven_day_boundary_beats_newer_partial():
     assert ref is not None
     assert ref["night"] == "2026-10-23"        # exactly day 7 → tier1, inclusive
     assert ref["full"] is True
+    assert ref["wh_h"] == pytest.approx(150.0, abs=1.0)
+
+
+def test_most_grid_off_hours_win_even_when_older_and_not_gapless():
+    """Owner ruling 2026-11-12 (23:3x) — DISSOLVES the gapless-full gate for
+    the load-profile measurement: "die Referenzmessung richtet sich nach der
+    astronomischen Nacht … Wichtig sind die Zeiten vom Grid Off state während
+    der astronomischen Nacht. Je mehr Stunden wir hier bekommen, desto
+    genauer ist das Lastprofil." Selection = the MOST grid-off HOURS inside
+    the astronomical night (the whole night = just the max-hours case), the
+    freshness stays the7-day window. The live case: the day-7 night carries
+    13.4 h off-grid with a5-min dawn release (full=False) and MUST beat the
+    day-2 evening fragment of2.6 h."""
+    _need_reference_module()
+    events = [
+        {"ts": "2026-10-23T09:00:00+02:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_off"}, "inputs": {}},   # off all day
+        {"ts": "2026-10-24T06:55:00+02:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_on"}, "inputs": {}},    # dawn release →5-min gap
+        {"ts": "2026-10-28T18:30:00+01:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_off"}, "inputs": {}},   # newer fragment
+        {"ts": "2026-10-28T20:30:00+01:00", "event": "act", "result": "ok",
+         "action": {"type": "switch_on"}, "inputs": {}},
+    ]
+    series = _rate_series(150.0, start_day=22, end_day=30,
+                          switch_at=_at(28, 18, 30), switch_rate=111.0)
+
+    def sun(d):
+        return (datetime(d.year, d.month, d.day, 7, 0),
+                datetime(d.year, d.month, d.day, 18, 30))
+
+    ref = build_reference(sun_times_fn=sun, events_fn=lambda since: events,
+                          series_fn=lambda a, b: series,
+                          now=datetime(2026, 10, 30, 9, 0), tz=TZ, n_nights=7)
+    assert ref is not None
+    assert ref["night"] == "2026-10-23"        # OLDER but12.4 h vs2.0 h → wins
+    assert ref["full"] is False                # the dawn release keeps it non-gapless
     assert ref["wh_h"] == pytest.approx(150.0, abs=1.0)

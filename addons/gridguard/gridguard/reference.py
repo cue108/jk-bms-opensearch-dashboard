@@ -18,14 +18,17 @@ laboratory conditions:
 * each clip must be >= `min_clip_min` (default 30 min); a night's load =
   ΣWh ÷ Σhours over ITS qualifying clips. A still-running night (sunrise
   ahead) is never a candidate — the reference is always a COMPLETED night;
-* OWNER RULES 2026-11-12 (the THREE-TIER hierarchy; always a RATE Wh/h,
-  consulted ONLY for the timer projection):
-  tier1 = the NEWEST WHOLE off-grid solar night (grid-off covers
-    [sunset, sunrise] exactly) inside the preference window — its marginal
-    accuracy edge REPLACES the default;
-  tier2 = the newest post-sunset grid-off clip at ANY AGE (the winter rule:
-    no value for seven days → "the off-grid night we have directly after
-    sunset");
+* OWNER RULES 2026-11-12 (final form, 23:3x — always a RATE Wh/h, consulted
+  ONLY for the timer projection): the reference = the ASTRONOMICAL night
+  (sunset→sunrise, defined INDEPENDENTLY of the grid state) ∩ grid off, and
+  the candidates are RANKED BY THE COVERED GRID-OFF HOURS — "Je mehr
+  Stunden wir hier bekommen, desto genauer ist das Lastprofil" (the whole
+  off-grid night = the max-hours case, NOT a separate class; the gapless
+  notion is dissolved for the measurement, `full` = display disclosure):
+  the freshness gate = the `n_nights` window (the owner's seven-day rule,
+  day7 inclusive); nothing in the window → the same hours-ranking at ANY
+  AGE (the winter rule: "die Off-Grid-Nacht die wir haben direkt nach
+  Sonnenuntergang");
   tier3 = HOLD the last journaled clip value until new data arrives (the
     value WANDERS — every new measurement replaces it; grid-on nights learn
     NOTHING: the battery is isolated from the loads, no median of nothing);
@@ -195,23 +198,25 @@ def _covers_night(sunset: datetime, sunrise: datetime, off_windows, tz) -> bool:
 
 
 def newest_reference(nights, off_windows, samples, *, now=None,
-                     min_clip_min: float = 30.0,
-                     full_window_days: int | None = None) -> dict | None:
-    """THE TIERED pick (owner rules 2026-11-12). `nights` = newest-first
-    `(date, sunset, sunrise)` — one block at a time: tier1 = the NEWEST night
-    whose grid-off covers the WHOLE solar night while it lies inside the
-    preference window (`full_window_days`; None = any age) — the accuracy
-    edge that REPLACES the default; else tier2 = the NEWEST night with a
-    qualifying post-sunset clip (any age). Running nights never qualify;
-    None = nothing here (the caller walks deeper, then holds the last value)."""
+                     min_clip_min: float = 30.0) -> dict | None:
+    """THE HOURS-RANKED pick (owner ruling 2026-11-12, 23:3x). `nights` =
+    newest-first `(date, sunset, sunrise)` — one block at a time. The
+    load-profile reference = the ASTRONOMICAL night (defined independently of
+    the grid state) ∩ grid off, and the selection is ranked by the COVERED
+    GRID-OFF HOURS: "Je mehr Stunden wir hier bekommen, desto genauer ist
+    das Lastprofil" — the whole off-grid night is just the max-hours case,
+    NOT a separate class (the gapless notion is dissolved for the
+    measurement; `full` stays a display disclosure only). Ties keep the
+    NEWEST (nights come newest-first, the comparison is strictly greater).
+    Running nights never qualify; None = nothing here (the caller walks the
+    freshness window, then deeper, then holds the last value)."""
     if not nights or not off_windows:
         return None
     tz = off_windows[0][0].tzinfo
     norm = sorted((_aware(ts, tz), ah, v) for ts, ah, v in (samples or []))
     now_a = _aware(now, tz) if now is not None else None
-    window0 = None if full_window_days is None else (
-        now_a.date() - timedelta(days=int(full_window_days)))
-    first_full = first_partial = None
+    best = None
+    best_hours = -1.0
     for night_date, sunset, sunrise in nights:
         s0, r0 = _aware(sunset, tz), _aware(sunrise, tz)
         if now_a is not None and r0 > now_a:
@@ -228,14 +233,10 @@ def newest_reference(nights, off_windows, samples, *, now=None,
         entry = {"night": nd.isoformat(), "source": "clip", "clips": clips,
                  "wh": wh, "wh_h": round(wh / hours, 1),
                  "min_clip_min": min_clip_min}
-        is_full = _covers_night(s0, r0, off_windows, tz)
-        entry["full"] = is_full               # tier1 disclosure (audit: truthy only)
-        if is_full and first_full is None \
-                and (window0 is None or nd >= window0):
-            first_full = entry
-        if first_partial is None:
-            first_partial = entry
-    return first_full if first_full is not None else first_partial
+        entry["full"] = _covers_night(s0, r0, off_windows, tz)  # display only
+        if hours > best_hours:                # more grid-off hours = more accurate
+            best, best_hours = entry, hours
+    return best
 
 
 def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
@@ -245,10 +246,11 @@ def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
     """THE THREE-TIER reference (owner rules 2026-11-12) — always a RATE
     (Wh/h), consulted ONLY for the timer projection.
 
-    Blocks of `n_nights` calendar nights, newest first: block0 = the tier1
-    preference window (a WHOLE off-grid solar night wins there over any newer
-    partial — the owner's seven-day rule); deeper blocks = tier2 (post-sunset
-    clips at ANY age, bounded by `max_lookback_days`). The switch acts are
+    Blocks of `n_nights` calendar nights, newest first: block0 = the
+    FRESHNESS window (the owner's seven-day rule, day7 inclusive — the +1
+    edge date; its hours-ranked candidate wins there); deeper blocks = the
+    SAME hours-ranking at ANY AGE (bounded by `max_lookback_days`), visited
+    only when the window is empty. The switch acts are
     fetched FIRST per block — a span without a single `switch_off` seed cannot
     produce any window, so its sun/counter consults are skipped (the deep walk
     stays cheap); sun times are memoized per evaluation (astronomy is constant
@@ -317,9 +319,7 @@ def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
             series = []
         offs = grid_off_windows(events, horizon_start, now_a, tz)
         ref = newest_reference(nights, offs, series, now=now_a,
-                               min_clip_min=min_clip_min,
-                               full_window_days=(int(n_nights)
-                                                 if is_first else 0))
+                               min_clip_min=min_clip_min)
         if ref is not None:
             return ref
     # --- tier3: HOLD the last journaled clip value until new data arrives ---
