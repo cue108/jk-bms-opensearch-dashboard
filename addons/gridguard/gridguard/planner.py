@@ -228,10 +228,28 @@ def plan_evening(now: datetime, available_wh: float | None,
         rate = need_wh * cfg.safety_factor / max(1.0, night_len_hours)
     head = max(0.0, available_wh - floor_wh)
     t_fire = now + timedelta(hours=head / rate)
+    # owner final spec 2026-11-13 (the inspection): the device cron is
+    # minute-granular — never arm a minute already gone (the dead
+    # 21:24:07-for-21:24 class). The crossing stands, clamped to the NEXT
+    # full minute (≤ 60 s shift, fires for sure); the physics below the
+    # band is the safety, never a re-timer.
+    _next_min = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
+    if t_fire < _next_min:
+        t_fire = _next_min
     # Phase B: the length clamp reads the HORIZON (any measured span length
     # via horizon_hours); night_len above stays the fallback divisor role
     horizon = horizon_hours if horizon_hours is not None else night_len_hours
     if switch_state == "off":
+        # owner final spec 2026-11-13 (the inspection): OUT of the middle
+        # band (head ≤ 0, the BMS values exhausted) the plan WAITS — the
+        # cell-voltage observation owns the edge (`voltage_floor_hit` → the
+        # emergency, reach-gated; it can't act while the actor is offline =
+        # why the prediction pre-programs the middle band's crossings in
+        # advance). No premature rescue (the reserve below the BMS zero is
+        # real), no dead past-timer (the clamp above).
+        if head <= 0:
+            return TimerPlan(actions=[("none",
+                                       {"reason": "out of band: cell-voltage observation"})])
         if t_fire >= now + timedelta(hours=horizon):
             return TimerPlan(actions=[("none",
                                        {"reason": "battery carries the whole night"})])

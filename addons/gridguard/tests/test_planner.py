@@ -159,10 +159,13 @@ def test_case_off_schedule_math():
     assert on["timer"]["do"] == {"switch": "on"} and on["timer"]["enabled"] == 1
 
 
-def test_case_off_below_floor_fires_now():
-    # available 50 < floor 76,8 → t_fire = now (still inside the horizon)
+def test_case_off_below_floor_waits_for_the_observation():
+    # available 50 < floor 76,8 → head ≤ 0 = OUT of the middle band — owner
+    # final spec 2026-11-13: the plan WAITS for the cell-voltage observation
+    # (`voltage_floor_hit` → the emergency owns the edge), never a rescue
+    # (the reserve below the BMS zero is real) and never a dead past-timer
     plan = _plan(available=50.0, need=80.0, switch="off")
-    assert plan.actions[0][1]["at_local"] == NOW
+    assert kinds(plan) == ["none"]
 
 
 def test_case_off_beyond_horizon_battery_carries_all():
@@ -175,9 +178,11 @@ def test_case_off_beyond_horizon_battery_carries_all():
 
 def test_case_off_tiny_night_len_uses_min_rate():
     # night_len below 1 h → rate floors at need/1.0 (max(1.0, night_len));
-    # head = 12 Wh above the 76,8-watt floor
-    plan = _plan(available=88.8, need=100.0, switch="off", night_len=0.5)
-    assert plan.actions[0][1]["at_local"] == NOW + timedelta(hours=12.0 / 120.0)
+    # head = 60 Wh above the 76,8-watt floor → a half-hour span keeps the
+    # timer path alive (owner rules 2026-11-13: below the minimum span the
+    # plan rescues directly instead of programming)
+    plan = _plan(available=136.8, need=100.0, switch="off", night_len=1.0)
+    assert plan.actions[0][1]["at_local"] == NOW + timedelta(hours=60.0 / 120.0)
 
 
 # --- hold_reason: the single wording source for grid_hold pushes --------------------
@@ -233,14 +238,14 @@ def test_reserve_floor_pct_raises_the_night_floor():
     the reserve band: floor 1,5 % = 76,8 Wh → 30 % = 1536 Wh."""
     tier_wh = 30.0 / 100.0 * 200.0 * 25.6
     assert tier_wh == pytest.approx(1536.0)
-    # OFF: the base crossing sits inside the learned night; with the tier floor
-    # the head (190 − 1536) clamps to zero → the failsafe fires NOW (the tier)
+    # OFF: the base crossing sits inside the learned night; with the UPS tier
+    # (30 % SOC) the head (190 − 1536) clamps to zero = OUT of the band →
+    # the plan waits for the cell-voltage observation (owner final spec)
     base = _plan(available=190.0, need=100.0, switch="off")
     dt_h = (190.0 - FLOOR_WH) / (100.0 * 1.2 / 11.0)
     assert base.actions[0][1]["at_local"] == NOW + timedelta(hours=dt_h)
     tier = _tier_plan(reserve_floor_pct=30)
-    assert kinds(tier) == ["failsafe_timer"]
-    assert tier.actions[0][1]["at_local"] == NOW
+    assert kinds(tier) == ["none"]
     # ON: the base spends the stored solar; under the tier band NOTHING sits
     # above the reserve → keep_grid (nothing is released below the tier)
     assert kinds(_plan(available=190.0, need=100.0, switch="on"))[0] == "release_night"
@@ -298,3 +303,23 @@ def test_projection_under_thirty_minutes_keeps_the_grid_on():
     # a real hour of span → release_night + the programmed crossing unchanged
     span = _plan(available=FLOOR_WH + 109.1, need=1000.0, switch="on")
     assert kinds(span) == ["release_night", "failsafe_timer"]
+
+
+def test_very_short_crossing_is_a_valid_clamped_timer_and_out_of_band_waits():
+    """Owner final spec 2026-11-13 (the inspection result): the floor law +
+    tier/UPS and the trivial `head ÷ rate` formula stay UNTOUCHED. The
+    middle band's short crossing = a VALID honest timer (pre-programmed for
+    the offline window — low_capacity_on is reach-gated), clamped to the
+    NEXT cron minute so it can never land in the past (the dead
+    21:24:07-for-21:24 class). Only OUT of the band (head ≤ 0) the plan
+    waits "none" for the cell-voltage observation — no premature rescue."""
+    # middle band, tiny head → the crossing = the imminent seconds → clamp +1 min
+    clamped = _plan(available=FLOOR_WH + 1.0, need=1000.0, switch="off")
+    assert kinds(clamped) == ["failsafe_timer"]
+    assert clamped.actions[0][1]["at_local"] == NOW + timedelta(minutes=1)
+    # out of the band (head ≤ 0) → wait for the observation: no timer, no rescue
+    oob = _plan(available=0.0, need=1000.0, switch="off")
+    assert kinds(oob) == ["none"]
+    # the middle band's honest short crossing stays a real, unclamped timer
+    short = _plan(available=FLOOR_WH + 20.0, need=1000.0, switch="off")
+    assert kinds(short) == ["failsafe_timer"]

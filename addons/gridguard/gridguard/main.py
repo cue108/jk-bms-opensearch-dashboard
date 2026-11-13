@@ -13,7 +13,7 @@ from .messages import msg, title
 from .notify import push as ntfy_push
 from .periods import night_windows
 from .planner import (TimerPlan, build_on_timer, hold_reason, local_cron,
-                      plan_evening, reference_crossing)
+                      night_floor_wh, plan_evening, reference_crossing)
 from .reach import reachable as _reachable
 from .reference import (audit_inputs as reference_audit_inputs,
                         reference_load as build_reference_load)
@@ -549,8 +549,30 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
         # release gate adds a soft BMS-SOC hold (`and _tier_release_ok`, below) —
         # while a tier is active the release needs soc at/above it; the floors
         # underneath are unchanged and remain the safety spine.
+        # owner rules 2026-11-13 (the minute-flap): the DRAIN release needs
+        # the same reality anchor as the eve — the projected grid-off span
+        # (head ÷ reference rate) must reach release_min_span_min (30) min.
+        # Near the floor the LiFePO4 REBOUND getäuscht the plain voltage
+        # check (ON = no load = the cells rebound above the floor) and this
+        # gate oscillated with the eve's crossing timers in ~1-minute ON
+        # cycles. Unknown rate/floor → the v7 doctrine holds (the drain above
+        # the floor/tier stays unconditional — no reference to anchor
+        # against); the ANCHOR is an addition when the reference exists
+        # (production: always, via the tier3 hold).
+        _span_ok = True
+        try:
+            _rate = (deps.reference_load() or {}).get("wh_h")
+            _floor = night_floor_wh(cfg, reading.full_ah, reading.pack_v, None)
+            _avail = (reading.remaining_ah or 0.0) * (reading.pack_v or 0.0)
+            if isinstance(_rate, (int, float)) and not isinstance(_rate, bool) \
+                    and _rate > 0 and _floor is not None \
+                    and reading.remaining_ah is not None:
+                _span_ok = ((_avail - _floor) / _rate) * 60.0 \
+                    >= cfg.release_min_span_min
+        except Exception:
+            _span_ok = True
         if not voltage_floor_hit(reading.min_cell_v, reading.charge_a, cfg) \
-                and _tier_release_ok(cfg, st, deps, reading):
+                and _tier_release_ok(cfg, st, deps, reading) and _span_ok:
             # T1 mandated order: collision first — abort the grid-off sequence on False
             if deps.act("disable_on_timers"):
                 ok = deps.act("switch_off", require_verify=True)   # R6 chain
@@ -973,25 +995,46 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                                                 or _data["at_local"])  # device stamp wins
         elif kind == "failsafe_timer":
             verdict = EveVerdict.RESCUE_TIMER
-            ok = deps.apply_plan(plan)           # the existing ensure-on programming path
-            st.rescue_timer_set = ok             # F3: device truth from the executor's read-back
-            # §27: TWO truths ride along — the PLANNER's crossing (intent,
-            # re-projected every tick = the ideal) and the WRITE-CONFIRMED armed
-            # (device truth, stamped by the executor as data["armed_local"]:
-            # verified write / identical program / within-deadband keep — the
-            # deadband path returns True WITHOUT writing, so `ok` alone would
-            # label the ideal as armed under tonight's §19 physics).
-            st.plan_ideal = data["at_local"]
-            armed = data.get("armed_local")
-            if armed is not None:
-                st.last_planned_fire = armed      # device-grounded armed only
-            elif ok and "armed_local" not in data:
-                # executors without the stamp contract (test fakes, DRY_RUN's
-                # suppressed write): ok meant "applied" there → keep the v3
-                # semantics (the handed-off crossing).
+            # owner ruling 2026-11-13 ("a SINGLE grid on prediction"): an
+            # armed program on the device IS the night's prediction from the
+            # load-profile snapshot — keep it, never rewrite it every tick
+            # (the re-arm followed the rebound-contaminated counter, wandered
+            # 21:10 → 21:24 and finally landed in the past). The standing
+            # program is the device truth and carries the stamps.
+            standing = [t for t in timers
+                        if (t.get("do") or {}).get("switch") == "on"
+                        and t.get("enabled", 1) != 0]
+            if standing:
+                st.rescue_timer_set = True
+                # stamps ride the PROJECTION (the card's ideal; the device
+                # truth lives in the audit's standing field) — no cron parsing
+                st.plan_ideal = data["at_local"]
                 st.last_planned_fire = data["at_local"]
-            # not ok / stamped-unknown → the last CONFIRMED armed survives —
-            # never overwrite device truth with an intention.
+                ok = True
+                deps.audit("eve_snapshot_kept",
+                           inputs={"standing": standing[0].get("atLocal"),
+                                   "projected": data["at_local"].isoformat(
+                                       timespec="minutes")})
+            else:
+                ok = deps.apply_plan(plan)           # the existing ensure-on programming path
+                st.rescue_timer_set = ok             # F3: device truth from the executor's read-back
+                # §27: TWO truths ride along — the PLANNER's crossing (intent,
+                # re-projected every tick = the ideal) and the WRITE-CONFIRMED armed
+                # (device truth, stamped by the executor as data["armed_local"]:
+                # verified write / identical program / within-deadband keep — the
+                # deadband path returns True WITHOUT writing, so `ok` alone would
+                # label the ideal as armed under tonight's §19 physics).
+                st.plan_ideal = data["at_local"]
+                armed = data.get("armed_local")
+                if armed is not None:
+                    st.last_planned_fire = armed      # device-grounded armed only
+                elif ok and "armed_local" not in data:
+                    # executors without the stamp contract (test fakes, DRY_RUN's
+                    # suppressed write): ok meant "applied" there → keep the v3
+                    # semantics (the handed-off crossing).
+                    st.last_planned_fire = data["at_local"]
+                # not ok / stamped-unknown → the last CONFIRMED armed survives —
+                # never overwrite device truth with an intention.
         elif kind == "keep_grid":
             verdict = EveVerdict.GRID_HOLD
             ok = deps.apply_plan(plan)           # no write by design; audited with reason

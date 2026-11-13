@@ -58,7 +58,7 @@ class FakeDeps:
                  cloud=True, solar_window=None, inventory_timers=None,
                  fail_read=False, fail_acts=False, profile=None, buckets=None,
                  sun_ok=True, sun_reason="test sun free", radiation_j=12e6,
-                 pack_v=PACK_V, reserve_tier_inputs=None, v_avg=PACK_V):
+                 pack_v=PACK_V, reserve_tier_inputs=None, v_avg=PACK_V, ref=None):
         self.min_v, self.charge, self.remaining_ah = min_v, charge, remaining_ah
         self.pack_v = pack_v
         # owner physics ruling 2026-10-26 (§20): the Wh-conversion voltage is a
@@ -73,7 +73,9 @@ class FakeDeps:
         self.reachable_flag, self.cloud = reachable_flag, cloud
         self.solar_window = solar_window if solar_window is not None else []
         self.inventory_timers = inventory_timers if inventory_timers is not None else \
-            [{"type": "repeat", "do": {"switch": "on"}, "enabled": 1, "atLocal": "0 4 * * *"}]
+            []   # realistic evening: the sunrise-clear disarms the night's
+                 # program by dawn — a standing timer must be EXPLICIT (owner
+                 # ruling 2026-11-13: the standing program = the prediction)
         self.fail_read, self.fail_acts = fail_read, fail_acts
         self.profile = profile if profile is not None else INSUFF   # no edges → 11 h night
         self.buckets = list(buckets) if buckets is not None else []  # v4: [] → need None
@@ -86,6 +88,9 @@ class FakeDeps:
         # Phase C: the forecast onset prediction the eve consults — None by
         # default (old behavior: no prediction source); pred_calls counts asks
         self.pred, self.pred_calls = None, 0
+        # the drain gate's reality anchor (owner rules 2026-11-13): None =
+        # the old world (the eve keeps its median; the gate holds conservatively)
+        self.ref = ref
 
     # --- reads ---
     def read_state(self):
@@ -94,6 +99,12 @@ class FakeDeps:
         return self.switch, list(self.inventory_timers)
     def timer_exists(self):
         return False   # T5 deps API: F2 rollover re-sync (brief transcription dropped it)
+
+    def reference_load(self):
+        # None = no reference (the old world for the eve); the gate tests
+        # pass ref={"wh_h": ...} explicitly for their span anchor
+        return self.ref
+
     def bms_latest(self):
         return BmsReading("t", self.min_v,
                           self.min_v + 0.01 if self.min_v is not None else None,
@@ -158,6 +169,11 @@ def eve_bring_on(cls=FakeDeps, **kw):
     st.low_capacity_ack = D(20, 10).date()
     kw.setdefault("min_v", 3.14)                  # corrected 3.14 ≤ 3.15 → floor
     kw.setdefault("switch", "off")
+    # the helper's contract: an ARMED ON-timer exists to be cleared —
+    # even when a caller passes inventory_timers=None explicitly
+    if kw.get("inventory_timers") is None:
+        kw["inventory_timers"] = [{"type": "repeat", "do": {"switch": "on"},
+                                   "enabled": 1, "atLocal": "0 4 * * *"}]
     kw.setdefault("inventory_timers", [])
     kw.setdefault("buckets", [])
     return st, cls(**kw)
@@ -201,7 +217,10 @@ def test_emergency_on_clears_timers_first_then_switches():
     # final-review F1 (b): §12.2 „on every intervention" — order pinned:
     # disable_on_timers act BEFORE the switch_on act (emergency protection), and
     # the clear result flag lands in the audit input timer_clear.
-    st, deps = AppState(), FakeDeps(min_v=2.89, switch="off")
+    st, deps = AppState(), FakeDeps(
+        min_v=2.89, switch="off",
+        inventory_timers=[{"type": "repeat", "do": {"switch": "on"},
+                           "enabled": 1, "atLocal": "0 4 * * *"}])
     tick(cfg, st, deps, D(14, 0))
     assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_on"]
     assert deps.inventory_timers[0]["enabled"] == 0     # the ON-timer class is disarmed
@@ -255,7 +274,11 @@ def test_low_capacity_healthy_voltage_stays_out():
 
 def test_aus_solar_collision_first_then_off():
     st, deps = AppState(), FakeDeps(min_v=3.30, remaining_ah=55.0, pack_current=22.0,
-                                    soc_pct=None, switch="on", solar_window=[22.0, 23.5])
+                                    soc_pct=None, switch="on", solar_window=[22.0, 23.5],
+                                    inventory_timers=[{"type": "repeat",
+                                                       "do": {"switch": "on"},
+                                                       "enabled": 1,
+                                                       "atLocal": "0 4 * * *}"}])
     tick(cfg, st, deps, D(11, 0))
     types = [a[0] for a in deps.acts]
     assert types == ["disable_on_timers", "switch_off"]       # T1 order enforced
@@ -319,6 +342,39 @@ def test_morning_aus_audit_carries_drain_ground():
     assert deps.forecast_calls == 0                            # the day predicts nothing
 
 
+def test_drain_release_needs_thirty_minutes_of_span():
+    """Owner rules 2026-11-13 (the minute-flap): the DRAIN release gets the
+    same reality anchor as the eve — the projected grid-off span (head ÷
+    reference rate) must reach release_min_span_min (30) minutes. Near the
+    floor (≈17 Wh head @ 133 Wh/h ≈ 8 min) the LiFePO4 REBOUND getäuscht the
+    plain voltage check (ON = no load = the cells rebound above the floor)
+    and this gate oscillated with the eve's crossing timers in ~1-minute ON
+    cycles — now it holds the grid ON."""
+    st, deps = AppState(), FakeDeps(remaining_ah=4.0, soc_pct=2.0, switch="on",
+                                    solar_window=[], sun_ok=True,
+                                    ref={"wh_h": 133.0})
+    tick(cfg, st, deps, D(12, 0))
+    assert not any(a[0] == "switch_off" for a in deps.acts)
+
+
+def test_eve_keeps_the_standing_program_instead_of_rearming():
+    """Owner ruling 2026-11-13 ("a SINGLE grid on prediction"): an armed
+    program on the device IS the night's prediction from the load-profile
+    snapshot — the eve must NOT rewrite it every tick (the re-arm followed
+    the rebound-contaminated counter, wandered 21:10 → 21:24 and finally
+    landed in the past). The standing program keeps its stamps."""
+    st = AppState()
+    standing = [{"type": "repeat", "do": {"switch": "on"}, "enabled": 1,
+                 "atLocal": "24 21 * * *"}]
+    deps = FakeDeps(switch="off", inventory_timers=standing,
+                    buckets=[{"need_wh": 800.0}], remaining_ah=9.6,
+                    ref={"wh_h": 133.0})
+    tick(cfg, st, deps, D(21, 24))
+    assert st.plan_ideal is not None            # the eve DID project a crossing
+    # …but kept the standing program instead of rewriting it:
+    assert not any(p[0] == "failsafe_timer" for p in deps.plan_seen)
+
+
 # §13 v7 SUPERSEDED: test_morning_gate_not_consulted_when_aus_condition_false — the
 # "no candidate" concept is gone; forecast_calls == 0 is pinned on the drain release
 # and the hold case on test_v7_safety_floor_outranks_everything.
@@ -339,7 +395,9 @@ def test_eve_release_night_runs_aus_collision_first():
                     self.acts.append((action, None, None, False, None)); return False
             return super().act(action, **kw)
     st = AppState(); st.morning_done = True
-    deps = DisableOnce(min_v=V400, remaining_ah=AH400, switch="on", buckets=NEED300)
+    deps = DisableOnce(min_v=V400, remaining_ah=AH400, switch="on", buckets=NEED300,
+                       inventory_timers=[{"type": "repeat", "do": {"switch": "on"},
+                                          "enabled": 1, "atLocal": "0 4 * * *"}])
     tick(cfg, st, deps, D(20, 10))
     assert [(a[0], a[3]) for a in deps.acts] == [("disable_on_timers", False),
                                                  ("disable_on_timers", False),
@@ -347,8 +405,9 @@ def test_eve_release_night_runs_aus_collision_first():
     assert deps.acts[2][4] is not None                      # the retry's switch_off carries a reason
     assert deps.switch == "off" and deps.inventory_timers[0]["enabled"] == 0
     assert st.evening_verdict == "rescue_timer" and st.morning_done  # combo end state = armed return
-    # the combo: the spend is followed by the programmed return at the crossing
-    assert deps.plan_seen[-1][1][1][0] == "failsafe_timer"   # the plan's second action
+    # owner ruling 2026-11-13 ("a SINGLE grid on prediction"): the standing
+    # program IS the prediction — kept (no rewrite), stamps ride the projection
+    assert any(e == "eve_snapshot_kept" for e, _ in deps.audits)
     assert st.rescue_timer_set is True and st.last_planned_fire == FIRE_EVE
     grid_off = [f for e, f in deps.audits if e == "grid_off"]
     assert grid_off and grid_off[0]["result"] == "ok"
