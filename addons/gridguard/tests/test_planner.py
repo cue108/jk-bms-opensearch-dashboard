@@ -278,3 +278,23 @@ def test_conservative_branch_when_neither_need_nor_rate_is_known():
     number): need AND load_wh_h both absent → bring_on_now exactly as
     before — the boundary the incident fix must not blur."""
     assert kinds(_plan(available=190.0, need=None, switch="off")) == ["bring_on_now"]
+
+
+# --- owner rulings 2026-11-13 (the live 21:00 → 21:10 flap) -----------------
+def test_projection_under_thirty_minutes_keeps_the_grid_on():
+    """Owner rules 2026-11-13: (1) a forecast/plan SHORTER than 30 minutes
+    must KEEP the grid ON state — releasing for a span the battery barely
+    covers only manufactures an ON → OFF → ON cycle (the live incident: ON
+    at 21:00 via the crossing, the eve released at 21:01 with the next
+    crossing programmed at 21:10); (2) when the grid is ALREADY ON because
+    the battery is too empty, the plans must not switch to GRID OFF
+    anymore — too-empty = a short projected span, so both rulings land on
+    the same reality anchor: the projected grid-off span must reach
+    cfg.release_min_span_min (30) minutes, measured against the LIVE
+    headroom and the reference rate. The §13 hour-long release stays."""
+    # need 1000 @ safety 1.2 / 11 h = 109.1 Wh/h → a 20 Wh head = ~11 min → KEEP
+    short = _plan(available=FLOOR_WH + 20.0, need=1000.0, switch="on")
+    assert kinds(short) == ["keep_grid"]
+    # a real hour of span → release_night + the programmed crossing unchanged
+    span = _plan(available=FLOOR_WH + 109.1, need=1000.0, switch="on")
+    assert kinds(span) == ["release_night", "failsafe_timer"]

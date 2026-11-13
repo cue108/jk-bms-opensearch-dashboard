@@ -114,6 +114,12 @@ class Config:
     reference_nights: int = 7
     reference_min_clip_min: int = 30
     reference_max_lookback_days: int = 365
+    # owner rulings 2026-11-13 (the live 21:00 → 21:10 flap): a plan whose
+    # projected grid-off span is SHORTER than this many minutes keeps the
+    # GRID ON state (no release); the "grid is ON because the battery is too
+    # empty → no plan may switch to OFF" ruling shares the same anchor —
+    # too-empty = a short projected span. Minutes.
+    release_min_span_min: int = 30
 
     @property
     def tz_name(self) -> str:
@@ -218,4 +224,5 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         reference_nights=int(e.get("REF_NIGHTS", "7")),
         reference_min_clip_min=int(e.get("REF_MIN_CLIP_MIN", "30")),
         reference_max_lookback_days=int(e.get("REF_MAX_LOOKBACK_DAYS", "365")),
+        release_min_span_min=int(e.get("RELEASE_MIN_SPAN_MIN", "30")),
     )

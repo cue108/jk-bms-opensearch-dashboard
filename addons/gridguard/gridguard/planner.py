@@ -151,11 +151,16 @@ def plan_evening(now: datetime, available_wh: float | None,
     2. OFF + crossing inside the learned night → failsafe_timer (the grid
        returns at the crossing; the battery carries the head); crossing
        beyond → none (the battery carries the whole night).
-    3. ON + headroom above the floor → release_night THEN failsafe_timer:
-       spend the stored solar NOW, program the grid back at the crossing —
-       a passing forecast is NOT required at the eve (spending stored solar
-       is always the goal; a sunless day simply has the grid carry loads).
-    4. ON + no headroom → keep_grid (nothing to give above the reserve).
+    3. ON + headroom above the floor AND a projected grid-off span of at
+       least `release_min_span_min` (30 min, owner 2026-11-13: the
+       21:00 → 21:10 flap — a shorter forecast keeps the grid ON, and an
+       ON caused by an empty battery is never released to OFF by a plan)
+       → release_night THEN failsafe_timer: spend the stored solar NOW,
+       program the grid back at the crossing — a passing forecast is NOT
+       required at the eve (spending stored solar is always the goal; a
+       sunless day simply has the grid carry loads).
+    4. ON + no headroom, or a span shorter than the minimum → keep_grid
+       (nothing to give above the reserve / not worth the flap).
     Unknowns never get a guessed number (owner doctrine: sensor values).
 
     `reserve_floor_pct` (owner ruling 2026-10-25, part 3): the weather-
@@ -243,6 +248,17 @@ def plan_evening(now: datetime, available_wh: float | None,
     if head <= 0:
         return TimerPlan(actions=[("keep_grid",
                                    {"reason": "reason: battery at floor reserve only"})])
+    # owner rulings 2026-11-13 (the live 21:00 → 21:10 flap): (1) a plan
+    # whose projected grid-off span is SHORTER than cfg.release_min_span_min
+    # (30) minutes must KEEP the grid ON state — releasing for a span the
+    # battery barely covers only manufactures an ON → OFF → ON nonsense
+    # cycle; (2) when the grid is ALREADY ON because the battery is too
+    # empty, no plan may switch to GRID OFF — too-empty = a short projected
+    # span, so both rulings share one reality anchor: head ÷ rate against
+    # the LIVE headroom and the reference rate (never a guessed number).
+    if (t_fire - now) < timedelta(minutes=cfg.release_min_span_min):
+        return TimerPlan(actions=[("keep_grid",
+                                   {"reason": "short span (<30 min): grid ON kept"})])
     # §31 ON-case: the release stays (§13), the post-sunrise TIMER does not —
     # the direct reaction exists once actor contact is back after sunrise.
     if next_onset is not None and t_fire >= next_onset:
