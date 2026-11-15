@@ -55,37 +55,102 @@ def build_off_timer(at_local: datetime, tz: tzinfo) -> dict:
 
 def night_floor_wh(cfg: Config, full_ah: float | None, pack_v: float | None,
                    reserve_floor_pct: int | None = None) -> float | None:
-    """The ONE floor law (owner rulings 2026-10-25 L2 wave1 + part 3):
-    floor_wh = SoC curve(TRUE_FLOOR_V) × capacity × LIVE pack_v, raised to the
-    RESERVE TIER via max() (the tier is a BMS-SOC percent of the SAME capacity
-    figure — both compose; the tier can only RAISE the night floor, the deep
-    voltage floor stays untouched beneath it). Shared by the eve plan and the
-    overnight re-estimation. None whenever a factor is unknown — pack_v is
-    checked HERE so the multiplication can never TypeError on None before a
-    caller's unknown-branch guard (a doc with full_ah but no pack.voltage
-    lands conservative). None/0 reserve = the documented pass-through."""
-    from .verdict import soc_pct_from_v
-    floor_pct = soc_pct_from_v(cfg.true_floor_v)
-    if reserve_floor_pct:
-        floor_pct = (max(floor_pct, reserve_floor_pct) if floor_pct is not None
-                     else float(reserve_floor_pct))
-    if floor_pct is None or full_ah is None or pack_v is None:
+    """The ONE floor law (owner FINAL rulings 2026-11-13):
+    - OUTSIDE the UPS mode there is NO floor subtraction: the head = the raw
+      BMS remaining and the PHYSICS at the BMS's own zeros (0 Wh / 0 % SOC)
+      is the floor ("die Physik ist der Boden bei 0Wh oder 0% SOC").
+    - The UPS RESERVE TIER (30 %/50 %, the bad-weather band) = the ONLY
+      floor = the tier band's Wh (the tier = a BMS-SOC percent of the BMS
+      capacity figure).
+    - NO textbook LiFePO4 voltage→SoC table anywhere in this chain (owner
+      engineering doctrine: the BMS = the ONLY sensor and the ONLY truth;
+      any table must come from OUR measurement data, never from a book).
+    Shared by the eve plan, the reference crossing and the gate.
+    Tier-inactive → 0.0 (no floor). Tier-active → the band's Wh; None
+    whenever a factor is unknown (pack_v checked HERE so the
+    multiplication can never TypeError on None before a caller's
+    unknown-branch guard → the conservative branch)."""
+    if not reserve_floor_pct:
+        return 0.0
+    if full_ah is None or pack_v is None:
         return None
-    return floor_pct / 100.0 * full_ah * pack_v
+    return reserve_floor_pct / 100.0 * full_ah * pack_v
+
+
+def action_day_floor_pct(now: datetime, cfg: Config, *, available_wh,
+                         need_wh, load_wh_h, night_len_hours, full_ah,
+                         pack_v, reserve_floor_pct,
+                         reserve_floor_pct_next) -> int | None:
+    """Owner ruling 2026-11-14 (DAY-OF-ACTION LAW): a timer PROGRAMMED now may
+    FIRE after midnight — the floor it enforces must be the tier OF THE FIRING
+    DAY ("consider the day the actor acts and not the day the programming
+    happens"; the UPS mode is active ONLY on the bad-weather forecast day,
+    never the day after). Probe the crossing under each candidate day's floor
+    and return the floor whose own day matches its crossing:
+
+    - crossing(today's floor) lands today      → today's floor (today's law);
+    - crossing lands after midnight            → switch to tomorrow's floor
+      (today's storm stop must not stop the battery a day late; tomorrow's
+      storm stop must stop it ON tomorrow);
+    - a probe whose inputs are unknown         → today's floor unchanged
+      (conservative: the caller's unknown-branch owns it);
+    - an unsatisfiable edge (each floor's crossing lands on the other day —
+      possible only when the battery sits inside the band at the eve) settles
+      after ≤3 iterations on the LAST-SWITCHED floor, i.e. the HIGHER one —
+      the safer stop: never drain below the coming reserve."""
+    if reserve_floor_pct_next is None or reserve_floor_pct_next == reserve_floor_pct:
+        return reserve_floor_pct
+    if available_wh is None or pack_v is None:
+        return reserve_floor_pct
+    if load_wh_h is not None and load_wh_h > 0:
+        rate = load_wh_h * cfg.safety_factor
+    elif need_wh is not None:
+        rate = need_wh * cfg.safety_factor / max(1.0, night_len_hours)
+    else:
+        return reserve_floor_pct                     # no rate → no probe (no guess)
+    if not (rate > 0):
+        return reserve_floor_pct
+
+    def _cross(pct: int | None) -> datetime | None:
+        f = night_floor_wh(cfg, full_ah, pack_v, pct)
+        if f is None:
+            return None
+        return now + timedelta(hours=max(0.0, available_wh - f) / rate)
+
+    eff = reserve_floor_pct
+    for _ in range(3):
+        t = _cross(eff)
+        if t is None:
+            return reserve_floor_pct                 # unknown factor → conservative
+        want = reserve_floor_pct_next if t.date() > now.date() else reserve_floor_pct
+        if want == eff:
+            break
+        eff = want
+    return eff
 
 
 def reference_crossing(now: datetime, available_wh: float | None,
                        load_wh_h: float | None, cfg: Config, *,
                        full_ah: float | None = None,
                        pack_v: float | None = None,
-                       reserve_floor_pct: int | None = None) -> datetime | None:
+                       reserve_floor_pct: int | None = None,
+                       reserve_floor_pct_next: int | None = None) -> datetime | None:
     """Owner REFERENCE-LOAD model (Phase A, 2026-10-30): the SAME crossing law
     as plan_evening restricted to the reference basis — the overnight
     re-estimation recomputes t_fire = now + max(0, avail − floor) ÷
     (load × safety) from the fresh §19 counter anchor. None whenever the
     available/floor/load is unknown — a guessed time is never returned (the
-    emergency floors keep owning safety underneath)."""
-    floor_wh = night_floor_wh(cfg, full_ah, pack_v, reserve_floor_pct)
+    emergency floors keep owning safety underneath).
+
+    `reserve_floor_pct_next` (owner DAY-OF-ACTION law 2026-11-14): this step
+    RE-PROGRAMS an armed timer — a crossing after midnight must carry the
+    FIRING day's floor, never the programming day's (see
+    action_day_floor_pct)."""
+    floor_wh = night_floor_wh(cfg, full_ah, pack_v, action_day_floor_pct(
+        now, cfg, available_wh=available_wh, need_wh=None,
+        load_wh_h=load_wh_h, night_len_hours=0.0, full_ah=full_ah,
+        pack_v=pack_v, reserve_floor_pct=reserve_floor_pct,
+        reserve_floor_pct_next=reserve_floor_pct_next))
     if (available_wh is None or floor_wh is None or load_wh_h is None
             or load_wh_h <= 0):
         return None
@@ -131,6 +196,7 @@ def plan_evening(now: datetime, available_wh: float | None,
                  pack_v: float | None = None,
                  full_ah: float | None = None,
                  reserve_floor_pct: int | None = None,
+                 reserve_floor_pct_next: int | None = None,
                  next_onset: datetime | None = None,
                  load_wh_h: float | None = None,
                  horizon_hours: float | None = None) -> TimerPlan:
@@ -168,6 +234,15 @@ def plan_evening(now: datetime, available_wh: float | None,
     at the tier band (max with the voltage-curve floor, see below); main.py
     passes it only when the latch is > 0 (None/0 = unchanged behavior).
 
+    `reserve_floor_pct_next` (owner DAY-OF-ACTION law 2026-11-14): the tier
+    OF THE DAY A PROGRAMMED TIMER FIRES ON. The eve runs on day D but its
+    crossing routinely lands on D+1 — a floor that belongs to day D must not
+    stop the battery a day late, and a floor that belongs to D+1 must stop it
+    ON D+1 ("consider the day the actor acts and not the day the programming
+    happens"). action_day_floor_pct probes the crossing under each day's
+    floor and re-bases the plan; None = no next-day information (old
+    behavior, byte-identical).
+
     `next_onset` (owner ruling §31, 2026-10-28): the ABSOLUTE next solar
     edge (the array-onset datetime, naive local) — the ON-timer exists ONLY
     as the WiFi-blackout insurance, so a crossing at/after sunrise must be
@@ -198,7 +273,14 @@ def plan_evening(now: datetime, available_wh: float | None,
     # into night_floor_wh (SoC curve × capacity × live pack_v, reserve tier
     # via max()) — shared with the overnight re-estimation; unknown factor →
     # None → the conservative branch below (no guessed floor, no TypeError).
-    floor_wh = night_floor_wh(cfg, full_ah, pack_v, reserve_floor_pct)
+    # owner DAY-OF-ACTION law 2026-11-14: the floor is selected for the day
+    # the timer FIRES on (a next-day crossing re-bases on the next day's
+    # tier) — action_day_floor_pct.
+    floor_wh = night_floor_wh(cfg, full_ah, pack_v, action_day_floor_pct(
+        now, cfg, available_wh=available_wh, need_wh=need_wh,
+        load_wh_h=load_wh_h, night_len_hours=night_len_hours, full_ah=full_ah,
+        pack_v=pack_v, reserve_floor_pct=reserve_floor_pct,
+        reserve_floor_pct_next=reserve_floor_pct_next))
     # owner ruling 2026-11-12 (21:33 incident): the REFERENCE RATE (load_wh_h,
     # the post-sunset grid-off clip mean Wh/h) IS a need basis — the rate law
     # below already projects it (rate = load × safety → t_fire → the actor-

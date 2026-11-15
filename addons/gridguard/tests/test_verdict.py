@@ -2,9 +2,9 @@ from dataclasses import replace
 from datetime import datetime
 import pytest
 from gridguard.config import load_config
-from gridguard.verdict import (Phase, corrected_min_cell_v, current_phase,
-                               deep_floor_hit, off_solar_ok, reserve_tier,
-                               voltage_floor_hit)
+from gridguard.verdict import (Phase, active_tier_on, corrected_min_cell_v,
+                               current_phase, deep_floor_hit, off_solar_ok,
+                               reserve_tier, voltage_floor_hit)
 
 GOOD = {"TZ": "Europe/Madrid", "WINDOW_START": "09:00", "WINDOW_END": "22:00",
         "EVE_START": "20:00", "RESCUE_AT": "04:00", "OPENSEARCH_URL": "http://x",
@@ -214,4 +214,21 @@ def test_reserve_tier_empty_or_short_outlook_is_zero():
                            replace(cfg, weather_min_j=15e6))[0] == 30
     # junk/None entries are tolerated, never a guessed trigger
     assert reserve_tier([None, "garbage"], cfg)[0] == 0
+
+
+def test_active_tier_on_is_the_forecast_day_only():
+    """Owner DAY-OF-ACTION law 2026-11-14: the ENFORCEMENT tier is the one of
+    the day the bad-weather forecast is FOR — the storm day itself, never the
+    day after. Not-covered date / non-list outlook = honest None (the caller
+    keeps the conservative latch fallback), never a guessed tier."""
+    days = [_day(date="2026-10-19", weather_code=95),
+            _day(date="2026-10-20", weather_code=3)]
+    assert active_tier_on(days, cfg, datetime(2026, 10, 19).date())[0] == 50
+    assert active_tier_on(days, cfg, datetime(2026, 10, 20).date())[0] == 0
+    # the ISO-string form (the shape the outlook carries) is accepted too
+    assert active_tier_on(days, cfg, "2026-10-19")[0] == 50
+    # honest unknowns — never a guessed tier
+    assert active_tier_on(days, cfg, datetime(2026, 10, 18).date()) is None
+    assert active_tier_on(None, cfg, datetime(2026, 10, 19).date()) is None
+    assert active_tier_on("junk", cfg, datetime(2026, 10, 19).date()) is None
 

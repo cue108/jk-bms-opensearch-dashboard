@@ -8,7 +8,6 @@ from gridguard.config import load_config
 from gridguard.learn import NightProfile
 from gridguard.main import AppState, RealDeps, tick
 from gridguard.switchlink import ChannelError, CloudClient
-from gridguard.verdict import soc_pct_from_v
 
 GOOD = {"TZ": "Europe/Madrid", "WINDOW_START": "09:00", "WINDOW_END": "22:00",
         "EVE_START": "20:00", "SAFETY_FACTOR": "1.2",
@@ -32,24 +31,27 @@ def buckets(*wh):
 NEED300 = buckets(300.0, 300.0)                       # need = 300 Wh
 NEED800 = buckets(800.0, 800.0)                       # need = 800 Wh
 FULL_AH = 222.0                                       # FakeDeps capacity anchor (BMS soc.full_ah)
-AH400 = 400.0 / PACK_V                                # remaining_ah fixture (400 Wh at v_avg=PACK_V)
+AH400 = 300.0 / PACK_V                                # remaining_ah fixture (300 Wh at v_avg=PACK_V)
 # --- owner physics ruling 2026-10-26 (§19/§20): available = remaining_ah × V_avg
 # (the BMS counter = the trusted mid-range instrument; FakeDeps v_avg defaults
-# to PACK_V → available = AH400 × PACK_V = 400.0 Wh). The corrected-voltage SOC
-# path no longer feeds the eve's available; floor = the voltage curve stays the
-# deep band's instrument (planner byte-untouched).
+# to PACK_V → available = AH400 × PACK_V = 300.0 Wh). The corrected-voltage SOC
+# path no longer feeds the eve's available. Owner floor law 2026-11-13 (no floor
+# outside the UPS): the RAW remaining is the head — the fixture must therefore
+# sit INSIDE the 11 h learned night (400 Wh ÷ 32.73 Wh/h = 12.2 h → beyond the
+# horizon → "none", nothing to schedule). The names keep the §20 history.
 def _corr(min_v, charge=0.0):
     """IR-Korrektur wie verdict.corrected_min_cell_v (Defaults r_cell_ohm)."""
     return min_v - charge * cfg.r_cell_ohm
 
 
-FLOOR_WH = soc_pct_from_v(cfg.true_floor_v) / 100.0 * FULL_AH * PACK_V   # 1,5 % ≈ 85,25 Wh
+FLOOR_WH = 85.25                                       # fixture energy base (number kept; the textbook table left the source)
 V400 = 3.26                                           # minimum-cell fixture (deep-band disclosure)
-AV400 = 400.0                                         # available = AH400 × PACK_V (§20 anchor)
-# v5 schedule: floor = SoC curve(TRUE_FLOOR_V)×full_ah×pack_v; rate = safety × need ÷ night_len
-FIRE_EVE = D(20, 10) + timedelta(hours=(AV400 - FLOOR_WH) / (300.0 * 1.2 / 11.0))
+AV400 = 300.0                                         # available = AH400 × PACK_V (§20 anchor; < rate×11 h so the raw crossing stays in-night)
+# v5 schedule: rate = safety × need ÷ night_len; raw head (owner floor law
+# 2026-11-13: no floor outside the UPS) ÷ rate = the programmed crossing
+FIRE_EVE = D(20, 10) + timedelta(hours=(AV400) / (300.0 * 1.2 / 11.0))
 # same math with SUFF edges (onset 8 − offset 19 = 13 h learned night)
-FIRE_SUFF = D(20, 10) + timedelta(hours=(AV400 - FLOOR_WH) / (300.0 * 1.2 / 13.0))
+FIRE_SUFF = D(20, 10) + timedelta(hours=(AV400) / (300.0 * 1.2 / 13.0))
 
 
 class FakeDeps:
@@ -344,13 +346,14 @@ def test_morning_aus_audit_carries_drain_ground():
 
 def test_drain_release_needs_thirty_minutes_of_span():
     """Owner rules 2026-11-13 (the minute-flap): the DRAIN release gets the
-    same reality anchor as the eve — the projected grid-off span (head ÷
-    reference rate) must reach release_min_span_min (30) minutes. Near the
-    floor (≈17 Wh head @ 133 Wh/h ≈ 8 min) the LiFePO4 REBOUND getäuscht the
-    plain voltage check (ON = no load = the cells rebound above the floor)
-    and this gate oscillated with the eve's crossing timers in ~1-minute ON
-    cycles — now it holds the grid ON."""
-    st, deps = AppState(), FakeDeps(remaining_ah=4.0, soc_pct=2.0, switch="on",
+    same reality anchor as the eve — the projected grid-off span (raw head ÷
+    reference rate; owner floor law 2026-11-13: no floor outside the UPS)
+    must reach release_min_span_min (30) minutes. At ≈51 Wh raw head @ 133
+    Wh/h ≈ 23 min the gate holds the grid ON — the LiFePO4 REBOUND still
+    getäuscht the plain voltage check (ON = no load = the cells rebound) and
+    without this gate the release oscillated with the eve's crossing timers
+    in ~1-minute ON cycles."""
+    st, deps = AppState(), FakeDeps(remaining_ah=2.0, soc_pct=2.0, switch="on",
                                     solar_window=[], sun_ok=True,
                                     ref={"wh_h": 133.0})
     tick(cfg, st, deps, D(12, 0))
@@ -453,11 +456,12 @@ def test_eve_keep_grid_hold_push_reason():
 
 
 def test_eve_keep_grid_at_floor_reserve():
-    # v5: ON + no headroom above the floor → keep_grid with the floor reason.
-    # §20 anchor: the counter (3,0 Ah → 76,8 Wh) sits BELOW the voltage floor
-    # (85,25 Wh) → head = 0. The floor-trigger case (3,14 V corrected) stays.
+    # v5: ON + head ≤ 0 → keep_grid with the floor reason. Owner floor law
+    # 2026-11-13: outside the UPS there is no band — only the BMS zeros leave
+    # the middle band (avail 0 Ah → head = 0). The floor-trigger case
+    # (3,14 V corrected) stays.
     st = AppState(); st.morning_done = True
-    deps = FakeDeps(min_v=3.14, remaining_ah=3.0, switch="on",
+    deps = FakeDeps(min_v=3.14, remaining_ah=0.0, switch="on",
                     inventory_timers=[], buckets=NEED800)
     tick(cfg, st, deps, D(20, 10))
     assert deps.plan_seen[0][0] == "keep_grid"
@@ -578,7 +582,7 @@ def test_eve_failsafe_applied_then_released_final_honest():
     tick(cfg, st, deps, D(21, 56))                           # spend + re-armed return
     assert st.evening_verdict == "rescue_timer"
     re_fire = D(21, 56) + timedelta(
-        hours=(AV400 - FLOOR_WH) / (300.0 * 1.2 / 11.0))
+        hours=(AV400) / (300.0 * 1.2 / 11.0))
     assert st.last_planned_fire == re_fire
     # §27 RETIME: the final no longer fires at the FIRST final tick (21:56 — the
     # incident's own timing this test used to pin) but at the eve's CLOSING
@@ -745,7 +749,7 @@ def test_eve_night_need_audit_every_tick_full_fidelity():
                                     "remaining_ah": AH400,
                                     "v_avg": PACK_V,
                                     "min_cell_v": V400, "min_cell_corr": V400,
-                                    "soc_pct_v": soc_pct_from_v(V400),
+                                    "soc_pct_v": None,   # the BMS here reports no SOC (the live figure is the truth; the table left the source)
                                     # Phase A (reference-load model) disclosure:
                                     # the crossing basis — this fake has NO
                                     # reference → None + the legacy rate actually
@@ -778,10 +782,10 @@ def test_eve_available_comes_from_the_counter_times_voltage_average():
     assert night["available_bms_wh"] == 12.0 * PACK_V        # same counter, INSTANT V
     assert night["min_cell_v"] == 3.26                       # deep-band disclosure kept
     assert night["min_cell_corr"] == 3.26 - 0.5 * cfg.r_cell_ohm
-    # the crossing time comes from the counter instrument, not the voltage curve
-    floor = soc_pct_from_v(cfg.true_floor_v) / 100.0 * FULL_AH * PACK_V
+    # the crossing = the counter's own remaining ÷ rate (owner final law 2026-11-13:
+    # no UPS = NO floor subtraction, the physics at the BMS zeros = the floor)
     expected = D(20, 10) + timedelta(
-        hours=(12.0 * 13.05 - floor) / (300.0 * 1.2 / 11.0))
+        hours=(12.0 * 13.05) / (300.0 * 1.2 / 11.0))
     assert deps.plan_seen[-1][1][0][0] == "failsafe_timer"
     assert deps.plan_seen[-1][1][0][1]["at_local"] == expected
 
@@ -792,7 +796,7 @@ def test_final_plan_states_actual_failsafe_timer():
     tick(cfg, st, deps, D(20, 10))                     # programs the failsafe fire
     assert st.last_planned_fire == FIRE_EVE
     second_fire = D(21, 56) + timedelta(               # FINAL re-projects idempotently
-        hours=(AV400 - FLOOR_WH) / (300.0 * 1.2 / 11.0))
+        hours=(AV400) / (300.0 * 1.2 / 11.0))
     tick(cfg, st, deps, D(21, 56))
     assert st.last_planned_fire == second_fire
     # §27 RETIME: the old assertion pinned the final at the FIRST final tick
@@ -1477,7 +1481,7 @@ def test_eve_night_len_prefers_measured_solar_span():
     assert deps.plan_seen[-1][1][0][0] == "failsafe_timer"
     at = deps.plan_seen[-1][1][0][1]["at_local"]
     expected = D(20, 10) + timedelta(
-        hours=(AV400 - FLOOR_WH) / (300.0 * 1.2 / 8.0))
+        hours=(AV400) / (300.0 * 1.2 / 8.0))
     assert at == expected
 
 
@@ -1754,6 +1758,29 @@ def test_drain_stops_at_the_tier_through_the_non_emergency_switch_on():
     assert on[0]["inputs"] == {"soc": 30.0, "tier_pct": 30, "ground": "tier"}
     assert on[0]["action"] == {"type": "switch_on"} and on[0]["result"] == "ok"
     assert st.last_observed_switch == "on"          # own act = the new observation baseline
+
+
+def test_drain_stop_uses_the_forecast_day_not_the_latched_window():
+    """Owner DAY-OF-ACTION law 2026-11-14: the UPS drain-stop is active ONLY
+    on the day the bad-weather forecast is FOR. A latch left from the window
+    decision (the storm was YESTERDAY) must not stop TODAY's discharge —
+    the same outlook with TODAY as the storm day still stops it."""
+    st = AppState(); st.reserve_tier_pct = 50; st.night_over = True
+    deps = FakeDeps(min_v=3.30, soc_pct=40.0, charge=-9.0, switch="off")
+    deps.outlook_days = lambda: ([{"date": "2026-10-18", "weather_code": 3,
+                                   "gust_max_kmh": 10.0, "precip_sum_mm": 0.0,
+                                   "radiation_sum_j": 14e6}],
+                                 "2026-10-17T21:00:00")
+    tick(cfg, st, deps, D(14, 0))                   # TODAY (10-18) is clean
+    assert deps.acts == []                          # latch for another day → no stop
+    deps.outlook_days = lambda: ([{"date": "2026-10-18", "weather_code": 95,
+                                   "gust_max_kmh": 40.0, "precip_sum_mm": 0.0,
+                                   "radiation_sum_j": 14e6}],
+                                 "2026-10-18T11:00:00")
+    tick(cfg, st, deps, D(14, 5))                   # TODAY IS the forecast day
+    assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_on"]
+    g = [f for e, f in deps.audits if e == "grid_on"]
+    assert g and g[0]["inputs"]["tier_pct"] == 50 and g[0]["inputs"]["ground"] == "tier"
 
 
 def test_reserve_tier_layer_never_blocks_the_deep_emergency():

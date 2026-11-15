@@ -210,9 +210,11 @@ def test_eve_uses_any_measured_span_length_as_the_horizon_40h_included():
     # span = 40 h (Oct16 15:55 → Oct18 07:55); crossing +11.5 h: the OLD gate
     # refused the span → night_len fell back to 11 h → "battery carries" (none).
     # The new code serves the horizon with the measured 40 h → armed.
+    # avail = rate × 11.5 h — owner floor law 2026-11-13: NO floor outside the
+    # UPS mode, so the raw remaining IS the head.
     SPANS40 = {datetime(2026, 10, 18, 7, 55):
                (datetime(2026, 10, 16, 15, 55), datetime(2026, 10, 18, 7, 55))}
-    avail = FLOOR_WH + 100.0 * cfg.safety_factor / 11.0 * 11.5
+    avail = 100.0 * cfg.safety_factor / 11.0 * 11.5
     st, deps = _eve_deps(remaining_ah=avail / PACK_V)
     deps.spans = SPANS40
     deps.pred = None                              # the onset side is NOT under test
@@ -225,7 +227,8 @@ def test_eve_uses_any_measured_span_length_as_the_horizon_40h_included():
 
 
 def test_planner_horizon_hours_overrides_only_the_length_clamp():
-    avail = FLOOR_WH + 100.0 * cfg.safety_factor / 11.0 * 11.5
+    # raw head (owner floor law 2026-11-13: no floor outside the UPS mode)
+    avail = 100.0 * cfg.safety_factor / 11.0 * 11.5
     args = dict(available_wh=avail, need_wh=100.0, switch_state="off",
                 night_len_hours=11.0, cfg=cfg, forecast_ok=True,
                 pack_v=PACK_V, full_ah=222.0)
@@ -235,7 +238,7 @@ def test_planner_horizon_hours_overrides_only_the_length_clamp():
     assert h40.actions[0][0] == "failsafe_timer"
     # …and the crossing time is untouched: night_len still feeds the DIVISOR
     assert h40.actions[0][1]["at_local"] == D(20, 10) + timedelta(
-        hours=(avail - FLOOR_WH) / (100.0 * cfg.safety_factor / 11.0))
+        hours=avail / (100.0 * cfg.safety_factor / 11.0))
 
 
 # ---------------------------------------------------------------------------
@@ -245,11 +248,10 @@ STALE16 = {datetime(2026, 10, 16, 7, 55):
 
 
 def _chain_tick(pred):
-    # crossing +11.6 h (rate = 100×1.2 ÷ the gated 16-h measured span) — the
+    # avail = rate × 11.6 h — raw head (no floor outside the UPS mode): the
     # boundary band between the PREDICTED onset (07:42 = +11.533 h) and the
-    # old stepped-measured onset (07:55 = +11.75 h): prediction present →
-    # refused at 07:46; the old code armed it (stepped edge said 07:55).
-    avail = FLOOR_WH + 100.0 * cfg.safety_factor / 16.0 * 11.6
+    # old stepped-measured onset (07:55 = +11.75 h) stays exactly as pinned.
+    avail = 100.0 * cfg.safety_factor / 16.0 * 11.6
     st, deps = _eve_deps(remaining_ah=avail / PACK_V)
     deps.spans = STALE16                          # length16 h (gate-legal), END 60 h old
     deps.pred = pred

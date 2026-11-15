@@ -19,8 +19,8 @@ from .reference import (audit_inputs as reference_audit_inputs,
                         reference_load as build_reference_load)
 from .solar_predict import solar_day_prediction as _solar_day_prediction
 from .switchlink import ChannelError, CloudClient, LanClient, deactivate_grid_timers
-from .verdict import (EveVerdict, Phase, corrected_min_cell_v, current_phase,
-                      deep_floor_hit, reserve_tier, soc_pct_from_v,
+from .verdict import (EveVerdict, Phase, active_tier_on, corrected_min_cell_v,
+                      current_phase, deep_floor_hit, reserve_tier,
                       voltage_floor_hit)
 from .weather import WeatherClient, ship_forecast, ship_outlook
 
@@ -516,16 +516,20 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
     # blocked a viable cloud act: dongle wlx… down while SOC 24 <= tier 30 ->
     # zero grid_on events all evening. A dead path still fails VISIBLY through
     # act()'s own audits; the drain-stop intent is unconditional on contact.
+    # owner DAY-OF-ACTION law 2026-11-14: the drain-stop enforces the tier OF
+    # TODAY (the forecast day itself) — a latched window decision for another
+    # day (the day after the bad weather) must never stop today's discharge.
+    tier_now = _active_tier_pct(cfg, st, deps, now.date())
     if (reading is not None and switch_state == "off"
-            and st.reserve_tier_pct > 0 and reading.soc is not None
-            and reading.soc <= st.reserve_tier_pct
+            and tier_now > 0 and reading.soc is not None
+            and reading.soc <= tier_now
             and reading.charge_a is not None
             and reading.charge_a < -cfg.solar_noise_a):
         ok = False
         if deps.act("disable_on_timers"):      # T1 collision-first (grid-off order)
             ok = deps.act("switch_on", require_verify=True,
                           reason=f"below reserve tier (BMS SOC {reading.soc:g}% "
-                                 f"<= {st.reserve_tier_pct}%) — stopping the "
+                                 f"<= {tier_now}%) — stopping the "
                                  f"discharge, not an emergency")
             if ok:
                 switch_state = "on"            # FIX1 mirror: _eve sees the fresh state
@@ -533,7 +537,7 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
                 tier_stopped = True            # … and the grid-off release stays out THIS tick
         deps.audit("grid_on", action={"type": "switch_on"},
                    result="ok" if ok else "failed",
-                   inputs={"soc": reading.soc, "tier_pct": st.reserve_tier_pct,
+                   inputs={"soc": reading.soc, "tier_pct": tier_now,
                            "ground": "tier"})
 
     # --- grid-off-gate (T1 collision-first; the ONLY grid-off path, all awake phases) ---
@@ -572,7 +576,7 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
         except Exception:
             _span_ok = True
         if not voltage_floor_hit(reading.min_cell_v, reading.charge_a, cfg) \
-                and _tier_release_ok(cfg, st, deps, reading) and _span_ok:
+                and _tier_release_ok(cfg, st, deps, reading, tier_now) and _span_ok:
             # T1 mandated order: collision first — abort the grid-off sequence on False
             if deps.act("disable_on_timers"):
                 ok = deps.act("switch_off", require_verify=True)   # R6 chain
@@ -684,7 +688,12 @@ def _night_resolve(cfg: Config, st: AppState, deps, now: datetime) -> None:
         now, avail, ref["wh_h"], cfg,
         full_ah=reading.full_ah if reading is not None else None,
         pack_v=reading.pack_v if reading is not None else None,
-        reserve_floor_pct=st.reserve_tier_pct or None)
+        # DAY-OF-ACTION law 2026-11-14: this step RE-PROGRAMS the armed timer —
+        # a crossing after midnight carries the FIRING day's tier, never the
+        # latched window max of the programming day.
+        reserve_floor_pct=_active_tier_pct(cfg, st, deps, now.date()),
+        reserve_floor_pct_next=_active_tier_pct(
+            cfg, st, deps, (now + timedelta(days=1)).date()))
     if t_new is None:
         return                                   # unknown floor/avail → no guess
     new_sig = local_cron(t_new)
@@ -777,7 +786,10 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
     # SoC-curve) — it feeds NO mid-range decision anymore (ruling above)
     _v_corr = (corrected_min_cell_v(reading.min_cell_v, reading.charge_a, cfg)
                if reading is not None else None)
-    _soc_p = soc_pct_from_v(_v_corr)
+    # owner engineering doctrine 2026-11-13: the BMS is the ONLY sensor and
+    # the ONLY truth — the textbook LiFePO4 voltage→SoC table left the
+    # source; the live BMS SOC is the deep-band disclosure value.
+    _soc_p = reading.soc if reading is not None else None
     # concept end-to-end (owner 2026-10-22): the crossing horizon = the
     # MEASURED solar-night length (last completed solar night), else the
     # learned hour edges, else the documented default.
@@ -881,13 +893,21 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
     # owner ruling §31 (§32): the ABSOLUTE next solar edge — computed above
     # WITH its source label (measured | predicted | profile | none, disclosed
     # in night_need.onset_src); None → the length clamp alone (no guess).
+    # owner DAY-OF-ACTION law 2026-11-14: the plan's floor = the tier OF THE
+    # DAY ITS TIMER FIRES ON (today's tier for a pre-midnight crossing, the
+    # next day's for one after — planner.action_day_floor_pct probes), while
+    # the release gates below speak for TODAY (the eve's own day).
+    tier_today = _active_tier_pct(cfg, st, deps, now.date())
+    tier_tomorrow = _active_tier_pct(cfg, st, deps,
+                                     (now + timedelta(days=1)).date())
     plan = plan_evening(now, available_wh, need, switch_state, night_len, cfg,
                         forecast_ok=sun_ok,
                         pack_v=reading.pack_v if reading is not None else None,
                         full_ah=reading.full_ah if reading is not None else None,
                         # owner part3: honor the reserve band in the night target
                         # (only when a tier is latched; None = old behavior)
-                        reserve_floor_pct=st.reserve_tier_pct or None,
+                        reserve_floor_pct=tier_today,
+                        reserve_floor_pct_next=tier_tomorrow,
                         next_onset=next_onset,
                         # Phase A: the reference load replaces the median
                         # basis in the crossing (None = old rate, audited)
@@ -904,7 +924,7 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
             # → no act, no verdict, no push (the grid stays on; the floors below
             # are untouched). The guarded tier_hold line usually already fired in
             # the grid-off block this very tick → still exactly ONE line.
-            if not _tier_release_ok(cfg, st, deps, reading):
+            if not _tier_release_ok(cfg, st, deps, reading, tier_today):
                 verdict, ok = None, True        # hold: the transition guard stays quiet
                 continue
             verdict = EveVerdict.NIGHT_RELEASE
@@ -946,7 +966,7 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
             # intent into NO ACTION (SOC 25 % vs tier 30 %, no timer armed).
             if grid_off_fight and not (
                     deps.reachable()
-                    and _tier_release_ok(cfg, st, deps, reading)):
+                    and _tier_release_ok(cfg, st, deps, reading, tier_today)):
                 grid_off_fight = False
             if grid_off_fight:
                 deps.audit("eve_bring_on_suppressed", inputs={
@@ -1194,7 +1214,26 @@ def _update_reserve_tier(cfg: Config, st: AppState, deps) -> None:
                                        "release_hyst_pct": cfg.tier_release_hyst_pct})
 
 
-def _tier_release_ok(cfg: Config, st: AppState, deps, reading) -> bool:
+def _active_tier_pct(cfg: Config, st: AppState, deps, on_date) -> int:
+    """Owner DAY-OF-ACTION law 2026-11-14: every ENFORCEMENT read of the
+    reserve tier (drain-stop, release gates, plan floors) evaluates the tier
+    OF THE DAY THE ACTOR ACTS ON — the bad-weather forecast day itself, never
+    the day after ("die UPS … nur für den Tag … nicht für den Tag danach";
+    "a programmed timer … should consider the day the actor acts and not the
+    day the programming happens"). The rolling outlook is filtered per date
+    (verdict.active_tier_on); outlook unknown or not covering `on_date` →
+    honest fallback to the latched window decision (missing data must never
+    silently disarm a hold). The latch itself (reserve_tier_pct / its audit)
+    stays the window record — this is the per-day enforcement view."""
+    try:
+        outlook, _ts = deps.outlook_days()
+    except Exception:                                   # noqa: BLE001 — no outlook source
+        return st.reserve_tier_pct                      # → the conservative latch
+    res = active_tier_on(outlook, cfg, on_date)
+    return st.reserve_tier_pct if res is None else res[0]
+
+
+def _tier_release_ok(cfg: Config, st: AppState, deps, reading, tier: int) -> bool:
     """Owner ruling 2026-10-25 (part 3): the RESERVE-TIER RELEASE GATE — while
     a tier is active, a release that would let the battery DISCHARGE may only
     run at/above tier + tier_release_hyst_pct (BMS SOC instrument — the carve-out lives in
@@ -1204,12 +1243,15 @@ def _tier_release_ok(cfg: Config, st: AppState, deps, reading) -> bool:
     the emergency act and voltage_floor_hit beneath are untouched (additive
     layer) and the GRID-ON emergency switch is never gated by the tier.
 
+    `tier` (DAY-OF-ACTION law 2026-11-14) is the caller's per-day evaluation
+    (_active_tier_pct for the day this gate acts on) — the gate never reads
+    the window latch itself.
+
     UNKNOWN reading/soc while a tier is active → the gate cannot show positive
     evidence → the release stays blocked (no discharge act without data); the
     mirrored drain-stop rule keeps the EXISTING drain on unknown SOC (no new
     act there either). Guarded audit: ONE tier_hold line per engage or tier
     change, never one per tick; the release act narrates the hold's end."""
-    tier = st.reserve_tier_pct
     soc = reading.soc if reading is not None else None
     if tier <= 0:
         st.tier_hold_pct = 0                 # no tier → nothing left to hold

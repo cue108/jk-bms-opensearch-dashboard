@@ -28,10 +28,9 @@ from gridguard.bms import BmsReading
 from gridguard.config import load_config
 from gridguard.main import AppState, _night_resolve, tick
 from gridguard.planner import plan_evening
-from gridguard.verdict import soc_pct_from_v
 from gridguard.web_page import PAGE
 from test_main_tick import (AH400, AV400, D, FLOOR_WH, FIRE_EVE, GOOD,
-                            FakeDeps, NEED300, cfg)
+                            FakeDeps, NEED300, PACK_V, cfg)
 
 try:                            # RED: the module does not exist yet — guard so
     from gridguard.reference import (audit_inputs, grid_off_windows,   # every
@@ -51,7 +50,7 @@ def _need_reference_module():
 # fixtures were quoted against (avail 1645.6 → 06:30 at 133 Wh/h ≈ +11.5 h).
 REFCFG = load_config({**GOOD, "SAFETY_FACTOR": "1.0"})
 REF_FULL_AH, REF_PACK_V = 200.0, 40.0
-FLOOR120 = soc_pct_from_v(REFCFG.true_floor_v) / 100.0 * REF_FULL_AH * REF_PACK_V
+FLOOR120 = 120.0                    # the fixture quote's number (the table left the source)
 NEED_INCIDENT = 2350.5                  # the constant night_need of the incident
 LOAD_REF = 133.0                        # Wh/h — the owner's quoted reference
 
@@ -86,7 +85,10 @@ def test_reference_load_crossing_is_0630_and_does_not_drift():
         (_at(29, 20, 59), 1384.5),
     ]
     fires = [_ref_fire(t, avail) for t, avail in samples]
-    target = datetime(2026, 10, 30, 6, 30)         # the owner-quoted crossing
+    # raw head (owner floor law 2026-11-13: no floor outside the UPS mode): the
+    # 133 Wh/h reference crossing of the first sample (1645.6 Wh from 19:01 →
+    # ≈ 07:23; the old 06:30 quote carried the retired 120 Wh band).
+    target = datetime(2026, 10, 30, 7, 23)
     for f in fires:
         assert abs((f - target).total_seconds()) <= 5 * 60, f
     spread_min = (max(fires) - min(fires)).total_seconds() / 60.0
@@ -271,12 +273,17 @@ def _eve_fire(deps):
 
 
 def test_eve_without_reference_keeps_the_old_median_crossing():
+    # raw head (owner floor law 2026-11-13: no floor outside the UPS):300 Wh ÷
+    # the median-basis rate = 9.17 h → the crossing stays inside the learned
+    # night and is computed with the OLD fallback basis (never the reference).
     st, deps = AppState(), RefDeps(ref=None, switch="off",
-                                   buckets=list(NEED300), remaining_ah=AH400)
+                                   buckets=list(NEED300),
+                                   remaining_ah=300.0 / PACK_V)
     tick(cfg, st, deps, D(20, 10))
     assert deps.ref_calls >= 1                # the consult ASKS for the reference
-    # the fallback crossing is byte-identical to the pre-model math
-    assert _eve_fire(deps) == FIRE_EVE
+    # the fallback crossing runs on raw available ÷ (need × safety ÷ night_len)
+    assert _eve_fire(deps) == D(20, 10) + timedelta(
+        hours=300.0 / (300.0 * 1.2 / 11.0))
     # …and the fallback marker rides the night_need audit (rate actually used)
     night = [f for e, f in deps.audits if e == "night_need"][-1]["inputs"]
     assert night["load_wh_h"] is None
@@ -290,8 +297,9 @@ def test_eve_with_reference_crossing_uses_the_reference_load():
                    ref={"night": "2026-10-17", "source": "clip", "wh_h": LOAD_REF,
                         "wh": 1200.0, "clips": [], "min_clip_min": 30.0})
     tick(cfg, st, deps, D(20, 10))
-    # t_fire = now + (avail − floor) ÷ (load × safety) — NOT need×safety/night_len
-    expected = D(20, 10) + timedelta(hours=(AV400 - FLOOR_WH) / (LOAD_REF * 1.2))
+    # t_fire = now + available ÷ (load × safety) — NOT need×safety/night_len
+    # (raw head: owner floor law 2026-11-13, no floor outside the UPS mode)
+    expected = D(20, 10) + timedelta(hours=AV400 / (LOAD_REF * 1.2))
     assert _eve_fire(deps) == expected
     night = [f for e, f in deps.audits if e == "night_need"][-1]["inputs"]
     assert night["load_wh_h"] == pytest.approx(LOAD_REF)
@@ -362,27 +370,29 @@ def test_blackout_recovery_0200_writes_the_new_crossing_and_audits_old_new():
     (blackout preservation). This instant models the EXCEPTION: the link died
     before the22:00 probe (night_over never latched → phase stays NIGHT) and
     CONTACT RESUMES at 02:00. Armed 04:14, fresh available 718.5 Wh →
-    crossing 05:45 (> 20 min move) → the full write path + audit.
+    raw-head crossing 06:30 (718.5 ÷ 159.6 Wh/h = +4.50 h; > 20 min move)
+    → the full write path + audit.
     The normal-night anti-drift workhorse is the EVE consult (the 19:01–
     20:59Z drift fixture above); the pre-blackout 22:30 tail case below pins
     THAT window."""
     deps = NightDeps(ref=dict(REF_CLIP), remaining_ah=718.5 / REF_PACK_V)
     st = AppState()
     tick(cfg, st, deps, _at(30, 2, 0))
+    expected = _at(30, 2, 0) + timedelta(hours=718.5 / (LOAD_REF * 1.2))
     assert len(deps.applied) == 1
     kind, data = deps.applied[0].actions[0]
     assert kind == "failsafe_timer"
-    assert data["at_local"] == datetime(2026, 10, 30, 5, 45)
-    assert data["fire_str"] == "05:45"
+    assert data["at_local"] == expected
+    assert data["fire_str"] == "06:30"
     audit = _night_audit(deps)
     assert len(audit) == 1
-    assert audit[0]["inputs"] == {"old_fire": "04:14", "new_fire": "05:45",
+    assert audit[0]["inputs"] == {"old_fire": "04:14", "new_fire": "06:30",
                                   "available_wh": 718.5, "load_wh_h": LOAD_REF,
                                   "deadband_min": 20}
     assert audit[0].get("result") == "ok"
     # the announced/plan fields follow the write truth (§27 machinery)
-    assert st.last_planned_fire == datetime(2026, 10, 30, 5, 45)
-    assert st.plan_ideal == datetime(2026, 10, 30, 5, 45)
+    assert st.last_planned_fire == expected
+    assert st.plan_ideal == expected
 
 
 def test_normal_night_tail_2230_re_estimates_and_writes():
@@ -391,32 +401,35 @@ def test_normal_night_tail_2230_re_estimates_and_writes():
     already latched by the reachable 22:00 probe — the phase stays NIGHT
     because t >= window_end wins BEFORE the night_over→MORNING branch of
     verdict.py, which only flips t < window_start). Same write contract:
-    armed 04:14, fresh available 1277.1 Wh → crossing 05:45 (> 20 min)."""
+    armed 04:14, fresh available 1277.1 Wh → raw-head crossing 06:30
+    (1277.1 ÷ 159.6 Wh/h = +8.00 h; > 20 min)."""
     deps = NightDeps(ref=dict(REF_CLIP), remaining_ah=1277.1 / REF_PACK_V)
     st = AppState()
     st.night_over = True                      # latched by the reachable 22:00 probe
     tick(cfg, st, deps, _at(29, 22, 30))
+    expected = _at(29, 22, 30) + timedelta(hours=1277.1 / (LOAD_REF * 1.2))
     # phase truth: this tick IS a night tick …
     assert deps.audits[0] == ("tick", {"phase": "night"})
     # … and the re-estimation ran the full write path
     assert len(deps.applied) == 1
     kind, data = deps.applied[0].actions[0]
     assert kind == "failsafe_timer"
-    assert data["at_local"] == datetime(2026, 10, 30, 5, 45)
-    assert data["fire_str"] == "05:45"
+    assert data["at_local"] == expected
+    assert data["fire_str"] == "06:30"
     audit = _night_audit(deps)
     assert len(audit) == 1
-    assert audit[0]["inputs"] == {"old_fire": "04:14", "new_fire": "05:45",
+    assert audit[0]["inputs"] == {"old_fire": "04:14", "new_fire": "06:30",
                                   "available_wh": 1277.1, "load_wh_h": LOAD_REF,
                                   "deadband_min": 20}
     assert audit[0].get("result") == "ok"
-    assert st.last_planned_fire == datetime(2026, 10, 30, 5, 45)
-    assert st.plan_ideal == datetime(2026, 10, 30, 5, 45)
+    assert st.last_planned_fire == expected
+    assert st.plan_ideal == expected
 
 
 def test_deadband_fresh_crossing_within_20_min_writes_nothing():
-    # armed 04:14; fresh crossing 04:29 → 15 min move ≤ 20 → silent keep
-    deps = NightDeps(ref=dict(REF_CLIP), remaining_ah=516.4 / REF_PACK_V)
+    # armed 04:14; fresh crossing 04:30 (raw head: 399 Wh ÷ 159.6 = +2.5 h)
+    # → 16 min move ≤ 20 → silent keep
+    deps = NightDeps(ref=dict(REF_CLIP), remaining_ah=399.0 / REF_PACK_V)
     tick(cfg, AppState(), deps, _at(30, 2, 0))
     assert deps.applied == []                  # the step LOOKED (read device
     assert deps.reads >= 1                     # truth) … but wrote NOTHING

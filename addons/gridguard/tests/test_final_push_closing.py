@@ -48,11 +48,12 @@ def _fire(now: datetime, hhmm: str) -> datetime:
 
 def _ah_for(now: datetime, target: datetime) -> float:
     """Craft the BMS counter (remaining_ah) so the REAL planner's crossing
-    t_fire = now + (available − floor) ÷ rate lands at `target` — the fixture
-    drives the production arithmetic; the SUT is never mocked."""
+    t_fire = now + available ÷ rate lands at `target` — the fixture drives the
+    production arithmetic; the SUT is never mocked. (Owner floor law 2026-11-13:
+    NO floor outside the UPS mode → the raw remaining IS the head.)"""
     rate = 300.0 * cfg.safety_factor / 11.0       # need × safety ÷ 11 h (INSUFF edges)
     hours = (target - now).total_seconds() / 3600.0
-    return (FLOOR_WH + rate * hours) / PACK_V
+    return (rate * hours) / PACK_V
 
 
 def _finals(deps):

@@ -46,26 +46,11 @@ def deep_floor_hit(min_cell_v: float | None, cfg: Config) -> bool:
     return min_cell_v <= cfg.thresh_deep
 
 
-# L2 wave 1 (owner ruling 2026-10-25, option 1): the STANDARD LiFePO4 SoC↔voltage
-# approximation — honest about the flat band (coarse ±10 % mid-curve), precise at
-# the ENDS where the floor decisions live. The fitted per-pack table from the
-# soc_anchor dataset supersedes this in wave 2 (display quality, not safety).
-SOCV_PCT = [(3.10, 0.0), (3.20, 3.0), (3.27, 8.0), (3.31, 25.0),
-            (3.33, 50.0), (3.40, 90.0), (3.45, 100.0)]
-
-
-def soc_pct_from_v(v: float | None) -> float | None:
-    """Physical SoC approximation from the corrected cell voltage (clamped)."""
-    if v is None:
-        return None
-    if v <= SOCV_PCT[0][0]:
-        return 0.0
-    if v >= SOCV_PCT[-1][0]:
-        return 100.0
-    for (v0, p0), (v1, p1) in zip(SOCV_PCT, SOCV_PCT[1:]):
-        if v <= v1:
-            return p0 + (v - v0) * (p1 - p0) / (v1 - v0)
-    return 100.0
+# owner ENGINEERING DOCTRINE (2026-11-13): the textbook LiFePO4 voltage→SoC
+# table REMOVED from the source — "unser Sensor ist das BMS und das ist die
+# EINZIGE WAHRHEIT"; tables are only ever built from OUR measurement data
+# (e.g. a per-pack fit from the soc_anchor dataset), never from a book. The
+# live BMS SOC is the truth; voltage = the out-of-band observation only.
 
 
 def corrected_min_cell_v(min_cell_v: float | None, pack_current: float | None,
@@ -181,6 +166,29 @@ def reserve_tier(days, cfg: Config) -> tuple[int, list[str]]:
     return max(50 if tier2_triggers else 0, 30 if tier1_triggers else 0), \
         tier2_triggers + tier1_triggers
 
+
+def active_tier_on(days, cfg: Config, on_date) -> tuple[int, list[str]] | None:
+    """Owner ruling 2026-11-14 (DAY-OF-ACTION LAW): the reserve tier is active
+    ONLY on the day the bad-weather forecast is FOR — never the day after
+    ("die UPS … nur für den Tag … nicht für den Tag danach"). An actor acting
+    on `on_date` evaluates the triggers OF THAT DATE only: filter the rolling
+    outlook to the date and run the SAME reserve_tier law on it (tier-2 legs
+    per day, tier-1 below-reference leg per day) — the 3-day window max stays
+    the latch/audit record (set at the eve for the coming day), this helper is
+    the ENFORCEMENT view the discharge-stop, the release gates and the plan
+    floors read.
+
+    None = honest unknown (the outlook does not cover `on_date`, or is not a
+    list at all) — the caller keeps the conservative latch fallback; missing
+    data must never silently disarm a hold. `on_date` accepts a date or its
+    ISO string."""
+    if not isinstance(days, list):
+        return None
+    key = on_date.isoformat() if hasattr(on_date, "isoformat") else str(on_date)
+    hit = [d for d in days if isinstance(d, dict) and d.get("date") == key]
+    if not hit:
+        return None
+    return reserve_tier(hit, cfg)
 
 
 def off_solar_ok(remaining_ah: float | None, recent_currents: list[float | None],

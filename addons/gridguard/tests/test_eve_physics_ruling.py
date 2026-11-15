@@ -27,7 +27,7 @@ import pytest
 
 from gridguard.config import load_config
 from gridguard.main import WRITE_DEADBAND_MIN
-from gridguard.verdict import deep_floor_hit, soc_pct_from_v, voltage_floor_hit
+from gridguard.verdict import deep_floor_hit, voltage_floor_hit
 from test_main_tick import D, FULL_AH, NEED300, PACK_V, FakeDeps, buckets
 from gridguard.main import AppState, tick
 
@@ -53,7 +53,7 @@ INC = {"TZ": "Europe/Madrid", "WINDOW_START": "09:00", "WINDOW_END": "22:00",
 inc_cfg = load_config(INC)
 NEED2428 = buckets(NEED_WH, NEED_WH)   # CLEAN median → 2428.35 Wh
 
-FLOOR_WH_INC = soc_pct_from_v(inc_cfg.true_floor_v) / 100.0 * FULL_AH * PACK_V_REAL
+FLOOR_WH_INC = 1.5 / 100.0 * FULL_AH * PACK_V_REAL    # frozen history value (the table left the source)
 
 
 def _minutes(hhmm: str) -> int:
@@ -91,8 +91,8 @@ def test_removed_voltage_path_bounces_the_crossing_by_hours():
     under-corrected the compressor dynamics — tonight's evidence: the 925-vs-
     1082 disagreement and the ladder itself; the fixture feeds the OBSERVED
     sampled pair.)"""
-    avail_rested = soc_pct_from_v(SAG_RESTED_V) / 100.0 * FULL_AH * PACK_V_REAL
-    avail_loaded = soc_pct_from_v(SAG_LOADED_V) / 100.0 * FULL_AH * PACK_V_REAL
+    avail_rested = 31.25 / 100.0 * FULL_AH * PACK_V_REAL
+    avail_loaded = 7.928571428571429 / 100.0 * FULL_AH * PACK_V_REAL
     assert avail_rested - avail_loaded > 600.0             # ~0.68 kWh swing
     now = D(20, 10)
     c_hi, c_lo = _crossing(avail_rested, now), _crossing(avail_loaded, now)
@@ -128,8 +128,11 @@ def test_load_cycle_available_monotone_and_crossing_converges():
         # The OBSERVED sampled pair stands for the sampled corrected series:
         # tonight's steady-state IR correction under-corrected the compressor
         # dynamics (evidence: the 925-vs-1082 disagreement + the ladder spread
-        # itself), so the raw sag pair is what the removed snapshot consumed.
-        old = soc_pct_from_v(deps.min_v) / 100.0 * FULL_AH * PACK_V_REAL
+        # itself), so the raw sag pair is what the removed snapshot consumed —
+        # the deleted table's FROZEN outputs alternating with the duty cycle
+        # (31.25 % rested ↔ 7.928571 % loaded, the observed pair).
+        old_pct = 7.928571428571429 if loaded else 31.25
+        old = old_pct / 100.0 * FULL_AH * PACK_V_REAL
         old_crossings.append(_crossing(old, now, need=NEED_WH))
     # NEW: monotone non-increasing available (real gentle descent = residual drift)
     assert all(b <= a for a, b in zip(availables, availables[1:]))
@@ -178,11 +181,12 @@ def test_available_is_counter_times_voltage_average_exact_numbers():
     assert night["remaining_ah"] == 12.0                    # the anchor, disclosed
     assert night["v_avg"] == 13.05                          # the conversion average
     assert night["available_bms_wh"] == pytest.approx(12.0 * PACK_V_REAL)
-    # the crossing runs on exactly this available (floor = voltage curve — untouched)
-    floor = soc_pct_from_v(cfg.true_floor_v) / 100.0 * FULL_AH * PACK_V_REAL
+    # the crossing runs on EXACTLY this available — owner floor law 2026-11-13:
+    # OUTSIDE the UPS mode there is NO floor ("die Physik ist der Boden bei
+    # 0 Wh oder 0 % SOC") → head = the raw BMS remaining.
     rate = 300.0 * 1.2 / 11.0
     assert deps.plan_seen[-1][1][0][1]["at_local"] == \
-        D(20, 10) + timedelta(hours=(12.0 * 13.05 - floor) / rate)
+        D(20, 10) + timedelta(hours=(12.0 * 13.05) / rate)
 
 def test_unknown_counter_or_voltage_stays_conservative():
     """No counter or no voltage at all → available None → the ratio's
@@ -361,15 +365,15 @@ def test_voltage_floor_truth_table_untouched():
 # happens ACROSS nights via the existing CLEAN-night learning. What REMAINS of
 # the depth expectation is proven below on the EXISTING wiring (zero code).
 A0_WH = 1560.0                         # dusk available (counter × V_avg) fixture
-FLOOR_A0 = soc_pct_from_v(inc_cfg.true_floor_v) / 100.0 * FULL_AH * PACK_V_REAL
 
 
 def test_tier_zero_keeps_no_hidden_reserve_and_a_tier_raises_the_floor():
     """PROVE-ONLY (existing behavior, §23/§24): reserve tier 0 → the planner
-    receives NO reserve floor (the deep voltage band stays the only floor =
-    the deepest sanctioned point); a latched tier > 0 raises the floor through
-    the EXISTING max() path (planner-pinned). Zero code change."""
-    # tier 0: the crossing uses ONLY the voltage-curve floor …
+    receives NO floor at all (owner floor law 2026-11-13: outside the UPS
+    mode there is no band — the physics at 0 % SOC is the floor); a latched
+    tier > 0 raises the floor through the EXISTING path (planner-pinned).
+    Zero code change."""
+    # tier 0: the crossing uses the RAW remaining (no floor outside the UPS) …
     st = AppState(); st.morning_done = True; st.reserve_tier_pct = 0
     deps = FakeDeps(min_v=3.30, remaining_ah=A0_WH / 13.05, switch="off",
                     inventory_timers=[], buckets=NEED2428,
@@ -377,7 +381,7 @@ def test_tier_zero_keeps_no_hidden_reserve_and_a_tier_raises_the_floor():
     tick(inc_cfg, st, deps, D(20, 0))
     at0 = deps.plan_seen[-1][1][0][1]["at_local"]
     assert (at0 - D(20, 0)).total_seconds() == pytest.approx(
-        (A0_WH - FLOOR_A0) / (NEED_WH / 11.0) * 3600.0, abs=1e-3)  # curve floor only
+        A0_WH / (NEED_WH / 11.0) * 3600.0, abs=1e-3)      # no floor: raw head
     # … and a latched 30 % tier raises the floor via the existing path: the
     # head above the raised band shrinks → the crossing moves EARLIER (toward
     # the band), never deeper than the reserve.
