@@ -58,7 +58,7 @@ def night_floor_wh(cfg: Config, full_ah: float | None, pack_v: float | None,
     """The ONE floor law (owner FINAL rulings 2026-11-13):
     - OUTSIDE the UPS mode there is NO floor subtraction: the head = the raw
       BMS remaining and the PHYSICS at the BMS's own zeros (0 Wh / 0 % SOC)
-      is the floor ("die Physik ist der Boden bei 0Wh oder 0% SOC").
+      is the floor ("the physics IS the floor at 0 Wh or 0 % SOC").
     - The UPS RESERVE TIER (30 %/50 %, the bad-weather band) = the ONLY
       floor = the tier band's Wh (the tier = a BMS-SOC percent of the BMS
       capacity figure).

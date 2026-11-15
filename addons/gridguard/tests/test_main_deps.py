@@ -367,7 +367,7 @@ def test_yield_learning_naive_sunset_from_weather_client_contract(make_deps):
             return {"ts": today.isoformat(),
                     "radiation_sum_j": 3_600_000.0, "kind": "forecast"}
 
-    class _WxNaive:                      # wie der Produktions-Client: NAIV
+    class _WxNaive:                      # like the production client: NAIVE
         def sun_times(self, d):
             return (_dt8.now(tz).replace(tzinfo=None),
                     (_dt8.now(tz) + _td8(hours=8)).replace(tzinfo=None))

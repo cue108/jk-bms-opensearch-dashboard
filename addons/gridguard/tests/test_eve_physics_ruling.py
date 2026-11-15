@@ -182,8 +182,8 @@ def test_available_is_counter_times_voltage_average_exact_numbers():
     assert night["v_avg"] == 13.05                          # the conversion average
     assert night["available_bms_wh"] == pytest.approx(12.0 * PACK_V_REAL)
     # the crossing runs on EXACTLY this available — owner floor law 2026-11-13:
-    # OUTSIDE the UPS mode there is NO floor ("die Physik ist der Boden bei
-    # 0 Wh oder 0 % SOC") → head = the raw BMS remaining.
+    # OUTSIDE the UPS mode there is NO floor ("the physics IS the floor at
+    # 0 Wh or 0 % SOC") → head = the raw BMS remaining.
     rate = 300.0 * 1.2 / 11.0
     assert deps.plan_seen[-1][1][0][1]["at_local"] == \
         D(20, 10) + timedelta(hours=(12.0 * 13.05) / rate)

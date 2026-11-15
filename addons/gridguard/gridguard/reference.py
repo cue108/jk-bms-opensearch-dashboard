@@ -21,14 +21,14 @@ laboratory conditions:
 * OWNER RULES 2026-11-12 (final form, 23:3x — always a RATE Wh/h, consulted
   ONLY for the timer projection): the reference = the ASTRONOMICAL night
   (sunset→sunrise, defined INDEPENDENTLY of the grid state) ∩ grid off, and
-  the candidates are RANKED BY THE COVERED GRID-OFF HOURS — "Je mehr
-  Stunden wir hier bekommen, desto genauer ist das Lastprofil" (the whole
+  the candidates are RANKED BY THE COVERED GRID-OFF HOURS — "the more
+  hours we get here, the more accurate the load profile" (the whole
   off-grid night = the max-hours case, NOT a separate class; the gapless
   notion is dissolved for the measurement, `full` = display disclosure):
   the freshness gate = the `n_nights` window (the owner's seven-day rule,
   day7 inclusive); nothing in the window → the same hours-ranking at ANY
-  AGE (the winter rule: "die Off-Grid-Nacht die wir haben direkt nach
-  Sonnenuntergang");
+  AGE (the winter rule: "the off-grid night we have right after
+  sunset");
   tier3 = HOLD the last journaled clip value until new data arrives (the
     value WANDERS — every new measurement replaces it; grid-on nights learn
     NOTHING: the battery is isolated from the loads, no median of nothing);
@@ -203,8 +203,8 @@ def newest_reference(nights, off_windows, samples, *, now=None,
     newest-first `(date, sunset, sunrise)` — one block at a time. The
     load-profile reference = the ASTRONOMICAL night (defined independently of
     the grid state) ∩ grid off, and the selection is ranked by the COVERED
-    GRID-OFF HOURS: "Je mehr Stunden wir hier bekommen, desto genauer ist
-    das Lastprofil" — the whole off-grid night is just the max-hours case,
+    GRID-OFF HOURS: "the more hours we get here, the more accurate is
+    the load profile" — the whole off-grid night is just the max-hours case,
     NOT a separate class (the gapless notion is dissolved for the
     measurement; `full` stays a display disclosure only). Ties keep the
     NEWEST (nights come newest-first, the comparison is strictly greater).
@@ -263,8 +263,8 @@ def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
     step = max(1, int(n_nights))
     # +1 = the window EDGE date: the night whose SUNSET sits exactly
     # `n_nights` days back must still be evaluated — day 7 is INCLUSIVE in
-    # the owner's rule ("wenn wir sieben Tage keinen Wert mehr bekommen
-    # haben") and the currently-RUNNING night eats one slot otherwise
+    # the owner's rule ("if we have gone seven days without a value")
+    # and the currently-RUNNING night eats one slot otherwise
     # (live find 2026-11-12: the day-7 full night fell just outside the
     # block and a day-2 partial won).
     total = max(int(n_nights), int(max_lookback_days)) + 1

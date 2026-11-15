@@ -47,8 +47,8 @@ def deep_floor_hit(min_cell_v: float | None, cfg: Config) -> bool:
 
 
 # owner ENGINEERING DOCTRINE (2026-11-13): the textbook LiFePO4 voltage→SoC
-# table REMOVED from the source — "unser Sensor ist das BMS und das ist die
-# EINZIGE WAHRHEIT"; tables are only ever built from OUR measurement data
+# table REMOVED from the source — "our sensor IS the BMS and it is the ONLY
+# TRUTH"; tables are only ever built from OUR measurement data
 # (e.g. a per-pack fit from the soc_anchor dataset), never from a book. The
 # live BMS SOC is the truth; voltage = the out-of-band observation only.
 
@@ -170,7 +170,7 @@ def reserve_tier(days, cfg: Config) -> tuple[int, list[str]]:
 def active_tier_on(days, cfg: Config, on_date) -> tuple[int, list[str]] | None:
     """Owner ruling 2026-11-14 (DAY-OF-ACTION LAW): the reserve tier is active
     ONLY on the day the bad-weather forecast is FOR — never the day after
-    ("die UPS … nur für den Tag … nicht für den Tag danach"). An actor acting
+    ("the UPS … only for the day … not for the day after"). An actor acting
     on `on_date` evaluates the triggers OF THAT DATE only: filter the rolling
     outlook to the date and run the SAME reserve_tier law on it (tier-2 legs
     per day, tier-1 below-reference leg per day) — the 3-day window max stays

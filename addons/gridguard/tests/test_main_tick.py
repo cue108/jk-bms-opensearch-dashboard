@@ -40,7 +40,7 @@ AH400 = 300.0 / PACK_V                                # remaining_ah fixture (30
 # sit INSIDE the 11 h learned night (400 Wh ÷ 32.73 Wh/h = 12.2 h → beyond the
 # horizon → "none", nothing to schedule). The names keep the §20 history.
 def _corr(min_v, charge=0.0):
-    """IR-Korrektur wie verdict.corrected_min_cell_v (Defaults r_cell_ohm)."""
+    """IR correction like verdict.corrected_min_cell_v (defaults r_cell_ohm)."""
     return min_v - charge * cfg.r_cell_ohm
 
 
@@ -350,7 +350,7 @@ def test_drain_release_needs_thirty_minutes_of_span():
     reference rate; owner floor law 2026-11-13: no floor outside the UPS)
     must reach release_min_span_min (30) minutes. At ≈51 Wh raw head @ 133
     Wh/h ≈ 23 min the gate holds the grid ON — the LiFePO4 REBOUND still
-    getäuscht the plain voltage check (ON = no load = the cells rebound) and
+    misled the plain voltage check (ON = no load = the cells rebound) and
     without this gate the release oscillated with the eve's crossing timers
     in ~1-minute ON cycles."""
     st, deps = AppState(), FakeDeps(remaining_ah=2.0, soc_pct=2.0, switch="on",

@@ -331,7 +331,7 @@ def test_daily_outlook_carries_radiation_sum_j_per_day():
     """owner ruling 2026-10-25 (part 3) — the outlook writer (l3 intake) now
     ALSO asks the SAME open-meteo request for shortwave_radiation_sum, so the
     tier-1 trigger gets a per-day expected-harvest input without a second
-    request. MJ/m²/Tag → Joule like the morning_radiation_j contract; a
+    request. MJ/m²/day → Joule like the morning_radiation_j contract; a
     missing value stays honest None (contributes nothing to the tier)."""
     payload = {"daily": {
         "time": ["2026-10-23", "2026-10-24"],

@@ -556,7 +556,7 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
         # owner rules 2026-11-13 (the minute-flap): the DRAIN release needs
         # the same reality anchor as the eve — the projected grid-off span
         # (head ÷ reference rate) must reach release_min_span_min (30) min.
-        # Near the floor the LiFePO4 REBOUND getäuscht the plain voltage
+        # Near the floor the LiFePO4 REBOUND misled the plain voltage
         # check (ON = no load = the cells rebound above the floor) and this
         # gate oscillated with the eve's crossing timers in ~1-minute ON
         # cycles. Unknown rate/floor → the v7 doctrine holds (the drain above
@@ -1218,7 +1218,7 @@ def _active_tier_pct(cfg: Config, st: AppState, deps, on_date) -> int:
     """Owner DAY-OF-ACTION law 2026-11-14: every ENFORCEMENT read of the
     reserve tier (drain-stop, release gates, plan floors) evaluates the tier
     OF THE DAY THE ACTOR ACTS ON — the bad-weather forecast day itself, never
-    the day after ("die UPS … nur für den Tag … nicht für den Tag danach";
+    the day after ("the UPS … only for the day … not for the day after";
     "a programmed timer … should consider the day the actor acts and not the
     day the programming happens"). The rolling outlook is filtered per date
     (verdict.active_tier_on); outlook unknown or not covering `on_date` →

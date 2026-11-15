@@ -582,8 +582,8 @@ def test_page_renders_the_reference_basis_next_to_the_crossing_time():
 # Owner rules 2026-11-12 (the three-tier reference hierarchy): the value is a
 # RATE (Wh/h) for the timer projection ONLY. Tier1 = a WHOLE off-grid solar
 # night REPLACES the default (marginal accuracy edge); tier2 = the off-grid
-# window we have directly after sunset (ANY age — "wenn wir sieben Tage keinen
-# Wert mehr bekommen"); tier3 = HOLD the last journaled value until new data
+# window we have directly after sunset (ANY age — "if we have gone seven
+# days without a value"); tier3 = HOLD the last journaled value until new data
 # arrives (never a static value: every new measurement replaces it = the value
 # WANDERS with the load profile). Grid-on nights learn NOTHING (the battery is
 # isolated from the loads).
@@ -703,8 +703,8 @@ def test_payload_last_ref_line_names_the_held_reference(payload_env):
 
 
 def test_tier1_full_night_at_the_seven_day_boundary_beats_newer_partial():
-    """THE BOUNDARY (owner rule: "wenn wir sieben Tage keinen Wert mehr
-    bekommen haben…" → day 7 INCLUSIVE): the night exactly `n_nights` days
+    """THE BOUNDARY (owner rule: "if we have gone seven days without a
+    value…" → day 7 INCLUSIVE): the night exactly `n_nights` days
     before `now` must still be EVALUATED — its hours (12.5 h vs 2.0 h) decide
     under the 23:3x hours-ranking. The date walk has to include
     `today - n_nights` (the running night eats one slot otherwise — live find
@@ -740,10 +740,10 @@ def test_tier1_full_night_at_the_seven_day_boundary_beats_newer_partial():
 
 def test_most_grid_off_hours_win_even_when_older_and_not_gapless():
     """Owner ruling 2026-11-12 (23:3x) — DISSOLVES the gapless-full gate for
-    the load-profile measurement: "die Referenzmessung richtet sich nach der
-    astronomischen Nacht … Wichtig sind die Zeiten vom Grid Off state während
-    der astronomischen Nacht. Je mehr Stunden wir hier bekommen, desto
-    genauer ist das Lastprofil." Selection = the MOST grid-off HOURS inside
+    the load-profile measurement: "the load-profile reference follows the
+    astronomical night … what matters are the times of the grid-off state
+    during the astronomical night. The more hours we get here, the more
+    accurate the load profile." Selection = the MOST grid-off HOURS inside
     the astronomical night (the whole night = just the max-hours case), the
     freshness stays the7-day window. The live case: the day-7 night carries
     13.4 h off-grid with a5-min dawn release (full=False) and MUST beat the
