@@ -1,8 +1,8 @@
-"""GridGuard learners — spec v4 §3/§4: ENERGY, not amperes; buckets never span
+"""GridGuard learners — ENERGY, not amperes; buckets never span
 regimes; only CLEAN feeds the trend. `night_need_wh` = median Wh of CLEAN night
-buckets → the evening decision's need figure. The v3 empirical learner below
+buckets → the evening decision's need figure. The empirical learner below
 (array sun-run edges + sufficiency) feeds the night WINDOW for that integration.
-Owner ruling 2026-10-22: energy is THE prediction unit — the ampere-based
+Energy is THE prediction unit — the ampere-based
 night load (and the dead `t_fire` amperes helper) were removed as misleading."""
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class NightProfile:
     array_offset_h: float | None    # local hour-of-day, learned evening
     samples_used: int               # qualifying night discharge samples
     sufficient: bool                # array_onset_h not None AND samples_used >=60
-    # owner ruling 2026-10-22: ENERGY is the prediction unit, amperes never are
+    # ENERGY is the prediction unit, amperes never are
     # — the former night_load_a (median A) was removed as misleading; the
     # learned figure is the integrated night ENERGY (Wh) in `night_need_wh`.
 
@@ -27,7 +27,7 @@ def _edge_hour(order: Iterable[int], night_hours: set[int],
                pos_median: dict[int, float | None],
                neg_median: dict[int, float | None],
                solar_noise_a: float) -> float | None:
-    """Spec R3'' steps 6/7, two-tier: prefer a POS-qualified hour (sun ingress surge),
+    """Two-tier edge pick: prefer a POS-qualified hour (sun ingress surge),
     else fall back to the first/last not-in-night hour that has any discharge data.
     `order` is ascending for the onset, descending for the offset."""
     for tier in (1, 2):
@@ -45,8 +45,8 @@ def _edge_hour(order: Iterable[int], night_hours: set[int],
 
 def learn_profile(samples, tz: tzinfo, solar_noise_a: float,
                   hist_days: int) -> NightProfile:
-    """LOCKED algorithm (spec R3'' — the ampere median was dropped by the owner
-    energy-unit ruling2026-10-22; edges + sufficiency unchanged). `hist_days`
+    """LOCKED algorithm (the ampere median was dropped with the
+    energy-unit rule; edges + sufficiency unchanged). `hist_days`
     documents the rolling window the caller fetched; no exceptions on
     empty/extreme input — everything degrades to None/`sufficient=False`."""
     # 1) bucket every sample's current by LOCAL hour-of-day; None currents are DROPPED
@@ -60,7 +60,7 @@ def learn_profile(samples, tz: tzinfo, solar_noise_a: float,
             ts = ts.astimezone(tz)      # aware → local wall time; naive used as-is
         buckets[ts.hour].append(c)
 
-    # 2/3) NULLLINIE-AUSSCHLUSS (owner rule): |c| <= solar_noise_a NEVER enters a
+    # 2/3) zero-line exclusion: |c| <= solar_noise_a NEVER enters a
     # statistic — grid-on idle hours contribute nothing to night load or sun-run.
     neg_median: dict[int, float | None] = {}
     pos_median: dict[int, float | None] = {}
@@ -81,8 +81,8 @@ def learn_profile(samples, tz: tzinfo, solar_noise_a: float,
                        if neg_median[h] is not None
                        and -neg_median[h] >= 0.6 * night_max}
 
-    # 5) qualifying night discharge samples (count only — owner ruling
-    #    2026-10-22: the learned PREDICTION figure is integrated ENERGY, never
+    # 5) qualifying night discharge samples (count only — the learned
+    #    PREDICTION figure is integrated ENERGY, never
     #    an ampere value; the median-A night load was removed as misleading)
     night_negs = [c for h in night_hours for c in buckets[h] if c < -solar_noise_a]
     samples_used = len(night_negs)
@@ -100,13 +100,13 @@ def learn_profile(samples, tz: tzinfo, solar_noise_a: float,
 
 def night_need_wh(buckets: list[dict], max_nights: int = 14,
                   min_clean: int = 1) -> float | None:
-    """Spec v4 §3/§4: the night need = median Wh over the CLEAN buckets among
+    """The night need = median Wh over the CLEAN buckets among
     the LAST `max_nights` entries of the chronologically ordered `buckets`
     (`BmsSource.night_buckets` output). Grid-on minutes already contribute
     exactly 0 Wh, but a half-run night DISTORTS the need (too little measured),
     so quality classes matter: MIXED/GRID_ON/SHORT/OPEN are excluded from the
     median ("only CLEAN feeds the trend"). None while the window holds no CLEAN
-    bucket — owner goal ruling (2026-10-20, "maximize solar use"): ONE full
+    bucket — ONE full
     measured CLEAN night is enough evidence (night fluctuations are minimal;
     the safety factor + the cell-volt floor carry the buffer). `min_clean`
     stays a knob to raise the moment the measured data shows real variance."""

@@ -1,6 +1,6 @@
-"""Candidate F (owner ruling §14, 2026-10-26): ENERGY-COMPENSATION TIER GATE.
+"""ENERGY-COMPENSATION TIER GATE.
 
-The owner compensation rule is "known grid-ON ⇒ battery-out is withheld from
+The compensation rule is "known grid-ON ⇒ battery-out is withheld from
 the net". Its own premise is KNOWN — so it applies ONLY to windows whose ON
 boundary is known evidence:
 
@@ -12,16 +12,17 @@ boundary is known evidence:
         (disclosure is never re-added into kwh = never double-counted);
   (iii) OBSERVED windows produce IDENTICAL numbers to before (the Oct20/21
         held 0.006 shape = regression pin);
-  (iv)  the actor column / ruling #10 code is untouched — energy layer only;
-  (v)   tonight's tier-1 write-confirmed windows = withhold (pinned).
+  (iv)  the actor column / boundary-truth code is untouched — energy layer
+        only;
+  (v)   tier-1 write-confirmed windows = withhold (pinned).
 
-Forensic context (cluster, host50 — same run): the Oct23 fill instant
-07:56Z was NOT an observed switch — the journal holds only ticks there; the
-07:56–07:58 +6.6..7.3 A step flickered back to −7.14 A (07:59) before
-sustained charging from 08:03, i.e. the solar-day ramp edge (day_bounds
-start = the first ≥3 A sample) read as a grid-ON run start. The old code
-then WITHHELD a real 1.909 kWh of battery-out (raw counter net −1.891) under
-that inferred label — exactly what this wave discloses instead.
+Why window B is interesting: the fill instant 07:56Z was NOT an observed
+switch — the journal holds only ticks there; the 07:56–07:58 +6.6..7.3 A step
+flickered back to −7.14 A (07:59) before sustained charging from 08:03, i.e.
+the solar-day ramp edge (day_bounds start = the first ≥3 A sample) read as a
+grid-ON run start. Withholding under that inferred label would swallow a real
+1.909 kWh of battery-out (raw counter net −1.891) — this test discloses it
+instead.
 """
 import json
 from datetime import datetime, timezone
@@ -88,7 +89,7 @@ def _week_agg():
         → withheld → kwh −2.427          (the Oct20/21 observed shape);
     MEASURED window B (fill 07:56Z):   raw stays visible, discharge disclosed
         day Oct23:   raw 1.533, in-B 0.096
-        night Oct23→24: raw −1.891, in-B 1.909   ← the §14 finding;
+        night Oct23→24: raw −1.891, in-B 1.909   ← the fill-window finding;
     mixed row (day Oct24: measured B tail + known E):
         raw 1.803, known-E 0.050, measured-B 0.010;
     tier-1 window C (write-confirmed fire 07:16, night Oct25→26):
@@ -265,7 +266,7 @@ def test_observed_window_withholds_identically_to_before(week_env):
 # --- (ii) MEASURED windows: raw net visible + disclosure ---------------------
 
 def test_fill_window_never_withholds_and_discloses_instead(week_env):
-    """THE §14 finding (fill-derived window B): kwh keeps the RAW net
+    """THE fill-window finding (fill-derived window B): kwh keeps the RAW net
     (1.533 / −1.891 — NOT the re-added 1.629 / +0.018), corrected goes to 0,
     and the in-window discharge is DISCLOSED instead."""
     g = wp.fetch_gridguard()
@@ -299,7 +300,7 @@ def test_mixed_row_withholds_known_only_and_discloses_measured(week_env):
 
 def test_tier_one_fire_window_withholds(week_env):
     """Window C opens at the write-confirmed fire instant (ensure_on
-    fire_str 07:16) — KNOWN → the owner rule applies unchanged."""
+    fire_str 07:16) — KNOWN → the compensation rule applies unchanged."""
     g = wp.fetch_gridguard()
     r = _row(g, "night", "2026-10-25T16:29+00:00", "2026-10-26T08:02+00:00")
     assert r["corrected"] == 0.100
@@ -335,7 +336,7 @@ def test_grid_on_windows_count_still_covers_both_tiers(week_env):
 # --- page markup: the disclosure is a tier-marked, honest cell ---------------
 
 def test_page_history_cell_discloses_measured_on_discharge():
-    """Owner UI order (2026-10-26, compact cell + one-line follow-up): the
+    """UI order (compact cell + one-line follow-up): the
     disclosure keeps the VALUE plus ONE text glyph — U+26A0 WARNING SIGN
     with U+FE0E text variation selector (⚠︎, monochrome, never the emoji
     form) wrapped in a native title/aria-label tooltip carrying the FULL

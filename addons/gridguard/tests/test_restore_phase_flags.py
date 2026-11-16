@@ -1,6 +1,6 @@
-"""Restart seed for the day-scoped phase flags (owner incident 2026-10-25:
-phase stuck at 'morning' after a mid-day restart → no eve roll → no night row
-in the frontend). Same hole class as restore_reserve_tier — same seam."""
+"""Restart seed for the day-scoped phase flags: without a durable seed a
+mid-day restart would leave the phase stuck at 'morning' → no eve roll → no
+night row in the frontend. Same hole class as restore_reserve_tier — same seam."""
 from datetime import datetime, time as _time, timedelta
 from pathlib import Path
 from types import SimpleNamespace

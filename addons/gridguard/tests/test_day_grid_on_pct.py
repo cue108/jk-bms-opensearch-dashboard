@@ -1,10 +1,10 @@
-"""L1 per-class yield (owner ruling 2026-10-25, option B): the grid-ON share
-of a measured solar day, reconstructed from the addon's OWN events-index
-labels (act switch_on/switch_off + the state_observed journal).
+"""L1 per-class yield: the grid-ON share of a measured solar day,
+reconstructed from the addon's OWN events-index labels (act switch_on/switch_off
++ the state_observed journal).
 
 Only the LEARNING becomes state-dependent — the solar-day threshold stays
-curve-based (Owner-Ruling 2026-10-21, unchanged). A failing Share-Query is an
-honest None (never a fabricated 0)."""
+curve-based (unchanged). A failing Share-Query is an honest None (never a
+fabricated 0)."""
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 

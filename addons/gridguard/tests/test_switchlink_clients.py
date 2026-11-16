@@ -14,8 +14,7 @@ import pytest
 from gridguard.switchlink import ChannelError, CloudClient, LanClient, decrypt_response
 
 # Identity lives in ONE test config (fixtures/switchlink-identity.json) —
-# not hardcoded here; the file doubles as a worked example for repo users
-# (owner ruling 2026-11-04).
+# not hardcoded here; the file doubles as a worked example for repo users.
 IDENT = json.loads((Path(__file__).resolve().parent / "fixtures"
                     / "switchlink-identity.json").read_text())
 KEY = IDENT["SW_MAIN_DEVICEKEY"]
@@ -82,7 +81,7 @@ def test_cloud_error_zero_required(monkeypatch):
         c.set_switch("1000375ad1", "off")
 
 
-# --- Hotfix round: CoolKit token self-heal on 401 (live spam 2026-10-18) -------
+# --- CoolKit token self-heal on 401 -------------------------------------------
 def _login_urls(urls):
     return [u for u in urls if u.endswith("/user/login")]
 
@@ -145,7 +144,7 @@ def test_deactivate_grid_timers_disarms_both_classes_keeps_input():
         {"type": "repeat", "do": {"switch": "on"}, "enabled": 0, "atLocal": "30 22 * * *"},
     ]
     out = deactivate_grid_timers(timers)
-    assert [t["enabled"] for t in out] == [0, 0, 0]          # BOTH classes disarmed (§12.2)
+    assert [t["enabled"] for t in out] == [0, 0, 0]          # BOTH classes disarmed
     assert out[1]["atLocal"] == "0 6 * * 1"                  # non-enabled fields preserved
     assert out[2]["enabled"] == 0                            # already disarmed stays disarmed
     assert [t["enabled"] for t in timers] == [1, 1, 0]       # input not mutated

@@ -24,7 +24,7 @@ def build_samples(days: int = 14, zeros: bool = True) -> list[BmsSample]:
     nights 22:00–06:00 → −12±1 A (hour buckets 22..5),
     days 08:00–19:59 → +5..+15 A (hour buckets 8..19),
     `zeros=True` adds a fat grid-on band (0.0 / ±0.3 A) inside 23:00–01:00 that the
-    NULLLINIE-AUSSCHLUSS (owner rule) must keep out of every statistic."""
+    NULLLINIE-AUSSCHLUSS (zero-line exclusion) must keep out of every statistic."""
     out: list[BmsSample] = []
     for d in range(days):
         day = BASE + timedelta(days=d)
@@ -45,7 +45,7 @@ def build_samples(days: int = 14, zeros: bool = True) -> list[BmsSample]:
 
 
 def test_profile_edges_and_sufficient():
-    # owner energy-unit ruling2026-10-22: no ampere figure in the profile —
+    # energy-unit rule: no ampere figure in the profile —
     # the prediction unit is the integrated night ENERGY (night_need_wh)
     p = learn_profile(build_samples(), TZ, NOISE, HIST_DAYS)
     # unambiguous fixture: first pos-qualified morning hour = 8, last evening = 19
@@ -57,7 +57,7 @@ def test_profile_edges_and_sufficient():
 
 
 def test_nullline_ausschluss_zeros_change_nothing():
-    """Owner rule: |current| <= solar_noise_a samples never enter any statistic."""
+    """Rule: |current| <= solar_noise_a samples never enter any statistic."""
     a = learn_profile(build_samples(zeros=True), TZ, NOISE, HIST_DAYS)
     b = learn_profile(build_samples(zeros=False), TZ, NOISE, HIST_DAYS)
     assert len(build_samples(zeros=True)) > len(build_samples(zeros=False))  # band present
@@ -90,7 +90,7 @@ def test_empty_and_flat_input_never_raise():
     assert flat.sufficient is False
 
 
-# --- v4 round A: night_need_wh (spec v4 §3/§4 — CLEAN-only median trend feed) ---
+# --- night_need_wh (CLEAN-only median trend feed) ------------------------------
 def _nb(night: str, wh: float, status: str = "CLEAN") -> dict:
     return {"night": night, "wh": wh, "minutes": 60, "on_minutes": 0,
             "status": status}
@@ -110,7 +110,7 @@ def test_night_need_median_of_clean_only():
 
 
 def test_night_need_requires_at_least_one_clean():
-    """Owner goal ruling (2026-10-20, "maximize solar use"): ONE full measured
+    """Goal "maximize solar use": ONE full measured
     CLEAN night is enough evidence — night-to-night fluctuations are minimal
     and the safety layer (factor + cell floor) carries the buffer."""
     assert night_need_wh([]) is None

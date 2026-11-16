@@ -1,9 +1,9 @@
-"""Restart-window safety (owner incident 2026-10-25 09:37:39 UTC): the
-reserve-tier decision IS durable in the events index (event reserve_tier,
-inputs {tier_pct, triggers, lookahead_days, outlook_ts, reference_kwh_m2,
-release_hyst_pct}) — only the in-memory latch forgets it on every restart
-(a deploy reset st.reserve_tier_pct to 0 and the first tick opened the
-release gate → day-drain switch_off while the owner-ordered tier was 30 %).
+"""Restart-window safety: the reserve-tier decision IS durable in the events
+index (event reserve_tier, inputs {tier_pct, triggers, lookahead_days,
+outlook_ts, reference_kwh_m2, release_hyst_pct}) — only the in-memory latch
+forgets it on every restart (a deploy reset st.reserve_tier_pct to 0 and the
+first tick opened the release gate → day-drain switch_off while the intended
+tier was 30 %).
 
 BmsSource asks for the NEWEST reserve_tier event: ONE bounded filter+sort
 query (size 1, sort ts desc — no scan) on the events index, as

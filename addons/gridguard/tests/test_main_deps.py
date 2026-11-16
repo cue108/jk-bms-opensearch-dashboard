@@ -1,4 +1,4 @@
-"""F4 (final review): RealDeps write verifies + v4 plan executor (spec v4 §6).
+"""RealDeps write verifies + plan executor.
 
 RealDeps is wired against stubbed clients (monkeypatched in gridguard.main /
 gridguard.audit) — no network, no disk; the timers dict IS the device truth.
@@ -60,7 +60,7 @@ class StubBms:
 
 
 class StubAudit:
-    def __init__(self, path, **kw): self.events = []   # **kw: RealDeps wires cfg (§10b)
+    def __init__(self, path, **kw): self.events = []   # **kw: RealDeps wires cfg
     def record(self, event, **fields): self.events.append((event, fields))
 
 
@@ -121,7 +121,7 @@ def test_apply_plan_rejects_dispatch_only_kinds(deps):
 
 
 def test_act_reason_lands_in_audit(deps):
-    # §9.7: the act line carries the reason (only when one was passed)
+    # the act line carries the reason (only when one was passed)
     assert deps.act("switch_on", require_verify=True,
                     reason="reason: night need not yet determinable") is True
     ev = [f for _, f in deps.audit_log.events if _ == "act"][-1]
@@ -140,12 +140,12 @@ def test_apply_plan_clear_grid_timers_deactivates(deps):
 
 
 def test_apply_plan_crossing_move_replaces_stale_on_timer(deps):
-    # owner live find 2026-10-22 (08:01 → 08:13 drift): the eve re-computed the
+    # live find (08:01 → 08:13 drift): the eve re-computed the
     # crossing and re-armed; the merge keyed on (switch, atLocal) KEPT the
     # stale 08:01 timer and appended 08:13 — the device held BOTH and would
     # fire the STALE one. Dedup = the STATE target (do.switch), regardless of
     # atLocal; foreign timers (other state / other kind) survive untouched.
-    # UPDATE (owner physics ruling 2026-10-26): a crossing move of ≤ 20 min is
+    # UPDATE: a crossing move of ≤ 20 min is
     # now a DEADBAND skip (no write) — the eviction proof needs a REAL move:
     # 08:01 → 08:41 (40 min > WRITE_DEADBAND_MIN) still evicts the stale one.
     tz = load_config(GOOD).tz
@@ -191,7 +191,7 @@ def test_timer_exists_reads_device_truth(deps):
     assert deps.timer_exists() is False                     # ChannelError → conservative False
 
 
-# ---- solar windows (owner ruling 2026-10-22: one concept everywhere) --------
+# ---- solar windows (one concept everywhere) -----------------------------------
 from datetime import date as _date, datetime as _datetime, timedelta as _timedelta
 
 
@@ -303,7 +303,7 @@ def test_yield_learning_computes_factor_and_audits(make_deps):
 
 
 def test_yield_learning_today_counts_only_after_calendar_sunset(make_deps):
-    """Owner rule2026-10-23: the length of an ONGOING solar day is only
+    """Rule: the length of an ONGOING solar day is only
     final AT/AFTER calendar sunset — today's provisional last-spike (b <= now
     while the sun is still up) must NOT count as a completed day (mid-day
     clouds would otherwise poison the learning with a truncated day)."""
@@ -346,7 +346,7 @@ def test_yield_learning_today_counts_only_after_calendar_sunset(make_deps):
 
 
 def test_yield_learning_naive_sunset_from_weather_client_contract(make_deps):
-    """PRODUCTION CONTRACT regression (tick_error 2026-10-23 20:07+): the
+    """PRODUCTION CONTRACT regression: the
     weather client returns NAIVE local datetimes (weather.py sun_times =
     fromisoformat of offset-less open-meteo strings) while bounds/now are
     tz-aware — the finality compare must normalize, never TypeError."""
@@ -378,7 +378,7 @@ def test_yield_learning_naive_sunset_from_weather_client_contract(make_deps):
 
 
 def test_real_weather_client_parse_feeds_solar_windows_aware(make_deps):
-    """TDD gap 2 (20:07 series): no test drove the REAL client parse
+    """TDD gap: no test drove the REAL client parse
     (offset-less open-meteo strings → NAIVE datetimes) into the RealDeps path —
     the stubs had drifted off the production contract. Pin: the captured
     sunset must come out of solar_windows() tz-aware."""
@@ -387,7 +387,7 @@ def test_real_weather_client_parse_feeds_solar_windows_aware(make_deps):
 
     deps = make_deps()
     w = WeatherClient(36.7, -4.4)
-    # production shape (live-checked 23.10.): offset-LESS local strings
+    # production shape: offset-LESS local strings
     w._get = lambda url: {"daily": {"time": ["2026-10-23"],
                                     "sunrise": ["2026-10-23T08:32"],
                                     "sunset": ["2026-10-23T19:31"]}}
@@ -399,10 +399,10 @@ def test_real_weather_client_parse_feeds_solar_windows_aware(make_deps):
 
 
 def test_apply_plan_ensure_on_write_refusal_is_audited_not_raised(deps):
-    """TDD gap 23.10. (act_failed 21:40): the ensure-on WRITE branch was never
+    """TDD gap: the ensure-on WRITE branch was never
     tested — the REAL cloud refusal (ChannelError with the live-4002
     payload) must be absorbed: act_failed verbatim, False, NOTHING
-    propagated into the eve (20:07 lesson) — and the next attempt heals."""
+    propagated into the eve — and the next attempt heals."""
     real_4002 = ("cloud status write failed: "
                  "{'error': 4002, 'msg': '控制失败', 'data': {}}")
     at = datetime(2026, 10, 19, 1, 10)
@@ -424,7 +424,7 @@ def test_apply_plan_ensure_on_write_refusal_is_audited_not_raised(deps):
 
 
 def test_apply_plan_skips_write_when_actor_already_holds_signature(deps):
-    """Owner2026-10-23 (4002 refusal): no redundant rewrite — ~15
+    """No redundant rewrite — ~15
     timer writes/evening loaded the cloud. If the actor carries exactly this
     program, the fresh read IS the verification → no write. A wild
     crossing still writes (the stale one must be evicted)."""
@@ -435,7 +435,7 @@ def test_apply_plan_skips_write_when_actor_already_holds_signature(deps):
     assert deps.cloud.set_calls == 1                          # NO second write
     acts = [f for e, f in deps.audit_log.events if e == "act"]
     assert len(acts) == 1                                     # no second confirmation:
-    # the write-act already confirmed this state (log readability 2026-10-23)
+    # the write-act already confirmed this state (log readability)
     # wild crossing → the write happens (dedup evicts the old one)
     later = datetime(2026, 10, 19, 1, 40)
     assert deps.apply_plan(_failsafe_plan(later)) is True
@@ -444,7 +444,7 @@ def test_apply_plan_skips_write_when_actor_already_holds_signature(deps):
 
 
 def test_apply_plan_collapses_identical_ok_acts_but_never_failures(deps):
-    """Owner2026-10-23 (log readability): identical OK confirmations of one
+    """Log readability: identical OK confirmations of one
     signature are audited only for the FIRST — changes and errors are never
     swallowed (the trail shows decisions, not the heartbeat)."""
     at = datetime(2026, 10, 19, 1, 10)
@@ -465,11 +465,11 @@ def test_apply_plan_collapses_identical_ok_acts_but_never_failures(deps):
     assert [e for e, f in deps.audit_log.events if e == "act_failed"]
 
 
-# -------- L1 per-class yield (owner ruling 2026-10-25, option B) -----------
+# -------- L1 per-class yield ---------------------------------------------------
 # The pack shunt measures solar REGARDLESS of grid status (grid-ON = gross
 # into the battery, grid-OFF = net after load coverage) → the learning factor
 # line is kept per class. Only the LEARNING becomes state-dependent; the day
-# threshold stays curve-based (Owner 2026-10-21). Thresholds: <10 % grid_off,
+# threshold stays curve-based. Thresholds: <10 % grid_off,
 # >=50 % grid_on, in between mixed, no value → unknown.
 def _learn_deps(make_deps, pct):
     """yield_learning fixture like test_yield_learning_computes_factor_and_audits,
@@ -571,7 +571,7 @@ def test_realdeps_day_grid_on_pct_wires_events_index_and_delegates(make_deps):
     assert deps2.bms.events_index == "myevents-*"
 
 
-# -------- restart-window safety (owner incident 2026-10-25 09:37:39 UTC) -------
+# -------- restart-window safety ------------------------------------------------
 # The seed (run() before the loop) asks for the newest reserve_tier decision
 # over the SAME Bms query client as day_grid_on_pct — RealDeps
 # delegates there unchanged (honest None flows through).
@@ -584,15 +584,15 @@ def test_realdeps_latest_reserve_tier_delegates_to_the_bms_query(make_deps):
     assert deps.latest_reserve_tier() is None
 
 
-# -------- display truth (owner doctrine 2026-10-26): every programming write
+# -------- display truth: every programming write
 # records ITS OWN time — the page's "announced" reads the last write-
-# confirmed ensure_on act (Brief: announced = write-confirmed programming;
+# confirmed ensure_on act (announced = write-confirmed programming;
 # plan ideal stays a separate, separately-labelled field) ----------------
 def test_apply_plan_ensure_on_audit_carries_programmed_time(deps):
     """The ensure_on act audit (result ok) carries inputs {fire_str, at_local}
     — the write-confirmed programming time of every ladder generation that the
     page renders as 'announced'. Before, the act events carried NO time
-    (live find 2026-10-26: 0 of 1707 events with fire_str/at_local)."""
+    (live find: 0 of 1707 events with fire_str/at_local)."""
     at = datetime(2026, 10, 19, 1, 10)
     assert deps.apply_plan(_failsafe_plan(at)) is True
     ev = deps.audit_log.events[-1]
@@ -616,12 +616,12 @@ def test_apply_plan_verify_failed_audit_also_carries_programmed_time(deps):
                                        "at_local": "2026-10-19T01:10"}
 
 
-# ---- owner PHYSICS ruling 2026-10-26 (§19): the write DEADBAND ---------------
+# ---- write DEADBAND -----------------------------------------------------------
 # Reprogram the actor only when the new crossing differs from the ARMED one by
-# more than WRITE_DEADBAND_MIN = 20 min (owner-approved 2026-10-26). The dedup
+# more than WRITE_DEADBAND_MIN = 20 min. The dedup
 # gains threshold semantics: |new − armed| <= X → silent skip, audited once as
 # a noop "within deadband"; beyond X → the write evicts the stale timer (the
-# 2026-10-22 eviction guarantee, now scoped to real moves). The armed timer is
+# eviction guarantee, now scoped to real moves). The armed timer is
 # the anchor in EVERY phase — inside the FINAL window the same semantics hold
 # (the crossing converges; nothing is rewritten while it drifts within X).
 from gridguard.main import WRITE_DEADBAND_MIN

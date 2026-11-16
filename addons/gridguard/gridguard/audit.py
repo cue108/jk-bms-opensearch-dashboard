@@ -1,11 +1,11 @@
 # gridguard/audit.py
-"""JSONL journal — whitelist-enforced so secrets structurally cannot land (R7).
+"""JSONL journal — field whitelist enforced so secrets structurally cannot land.
 
-v4 §10b Decision-Index dual-write: the SAME record is additionally POSTed
-(best-effort, never raising into the loop) as a doc into
-`{os_url}/{EVENTS_INDEX_PREFIX}-{YYYY.MM.DD}/_doc`. The jsonl write comes
-FIRST and is unconditional — local truth always lands even when the cluster
-is down; the index is the query truth, the jsonl stays the robustness truth.
+The same record is additionally POSTed (best-effort, never raising into the
+loop) as a doc into `{os_url}/{EVENTS_INDEX_PREFIX}-{YYYY.MM.DD}/_doc`
+(the event-index dual-write). The jsonl write comes FIRST and is
+unconditional — local truth always lands even when the cluster is down; the
+index is the query truth, the jsonl stays the robustness truth.
 """
 from __future__ import annotations
 
@@ -20,8 +20,8 @@ from typing import Callable
 ALLOWED = {"phase", "verdict", "inputs", "action", "channel", "result", "sequence", "value",
            "inventory", "timer_action", "kind"}
 
-INDEX_TIMEOUT_S = 3.0         # §10b: same stdlib-HTTP way as bms._search, short timeout
-_INDEX_THROTTLE_S = 3600.0    # ≥1h between dual-write error lines (main.py hotfix pattern)
+INDEX_TIMEOUT_S = 3.0         # short timeout, stdlib HTTP like bms._search
+_INDEX_THROTTLE_S = 3600.0    # >=1h between dual-write error lines
 _last_index_err: float | None = None   # module-level: ONE throttled stderr line per hour
 
 
@@ -34,7 +34,7 @@ def _post(url: str, body: bytes, timeout: float) -> None:
 
 
 def _local_date(ts: str, tz) -> date:
-    """Index day = LOCAL date of the record's ts in `tz` (spec §10b).
+    """Index day = LOCAL date of the record's ts in `tz`.
 
     Record ts is a UTC ISO string → converted with `astimezone(tz)`;
     a NAIVE ts is taken as local wall-clock time as-is (documented contract)."""
@@ -59,7 +59,7 @@ class AuditLog:
                  events_index_enabled: bool = True):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.path = path
-        # §10b dual-write target: os_url=None (path-only construction) = jsonl-only
+        # dual-write target: os_url=None (path-only construction) = jsonl-only
         self.os_url = os_url
         self.tz = timezone.utc if tz is None else tz
         self.dry_run = dry_run
@@ -77,14 +77,13 @@ class AuditLog:
         rec.update(fields)
         with self.path.open("a", encoding="utf-8") as f:   # jsonl FIRST, unconditional
             f.write(json.dumps(rec, ensure_ascii=False) + "\n")
-        self._index_write(rec)               # §10b advisory — may fail, may never raise
-        print(json.dumps(rec, ensure_ascii=False), flush=True)   # tee-style console echo —
-        # owner2026-10-21: index/jsonl stay THE one source; this only SHOWS the same
-        # record on stdout so `docker logs` reveals the loop's decisions (never a secret,
-        # rec is R7-whitelist-clean before this point).
+        self._index_write(rec)               # advisory — may fail, may never raise
+        print(json.dumps(rec, ensure_ascii=False), flush=True)   # tee-style console echo:
+        # the same whitelist-clean record shown on stdout so `docker logs` reveals
+        # the loop's decisions (never a secret).
 
     def _index_write(self, rec: dict) -> None:
-        """Dual-write one record to `{prefix}-{YYYY.MM.DD}/_doc` (spec §10b).
+        """Dual-write one record to `{prefix}-{YYYY.MM.DD}/_doc`.
         Kill-switch off or no target → no-op; ANY failure → throttled stderr only."""
         if not self.events_index_enabled or not self.os_url:
             return

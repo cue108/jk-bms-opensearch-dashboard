@@ -15,11 +15,10 @@ def test_audit_whitelist_accepts_and_rejects(tmp_path):
     with pytest.raises(ValueError):
         log.record("x", password="nope")
 
-# T6: msg key FINAL SET (Interfaces) — morning_off removed, grid_off/low_capacity_on/planner_set added
-# v4 §9.7: grid_hold de-duplicated (title carries the state), night_release added
-# 2026-10-21: manual_override added (owner — recognize a hand on the switch)
-# §27 2026-10-27: night_plan_armed(+_ideal) — the final push leads with the
-# write-confirmed armed, the plan ideal rides last when it differs (both dicts)
+# FINAL msg key set — grid_hold de-duplicated (the title carries the state),
+# night_release added; night_plan_armed(+_ideal): the final push leads with the
+# write-confirmed armed, the plan ideal rides last when it differs (both dicts);
+# manual_override recognizes a hand on the switch.
 KEYS = {"emergency_on", "low_capacity_on", "rescue_set", "safe_clear", "grid_off",
         "no_channel", "night_plan", "night_plan_armed", "night_plan_armed_ideal",
         "timer_fallback", "planner_set", "grid_hold",
@@ -31,10 +30,9 @@ def test_message_key_set_de_and_en():
     assert set(MSG["en"]) == KEYS
 
 def test_push_title_localization():
-    # owner ruling 2026-11-04 ("English ONLY" + compatibility): the STORED kind
-    # is the stable English key, the ntfy display title stays localized — de
-    # keeps the former German kind values byte-identical (history + phone);
-    # unknown kinds pass through (display-truth: never invent).
+    # the STORED kind is the stable English key, the ntfy display title stays
+    # localized — de keeps the former German kind values byte-identical
+    # (history + phone); unknown kinds pass through (never invent).
     from gridguard.messages import title
     assert title("NIGHT PLAN", "de") == "NACHTPLAN"
     assert title("EMERGENCY", "de") == "NOTSCHUTZ"
@@ -44,7 +42,8 @@ def test_push_title_localization():
     assert title("UNKNOWN KIND", "de") == "UNKNOWN KIND"
 
 def test_grid_hold_wording_is_not_doubled():
-    # §9.7 fix: previously "GRID ON / grid on: Rest…" — the reason stands alone now
+    # grid_hold de-duplication: previously "GRID ON / grid on: Rest…" — the
+    # reason stands alone now
     assert msg("de", "grid_hold", reason="reason: night need not yet determinable") \
         == "reason: night need not yet determinable"
     assert msg("en", "grid_hold", reason="available 768 Wh < 1.2× night need 800 Wh") \

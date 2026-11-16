@@ -1,4 +1,4 @@
-"""Display truth (owner doctrine 2026-10-26): the page's "announced grid-on"
+"""Display truth: the page's "announced grid-on"
 must be the LAST write-confirmed programming (ensure_on act, result ok,
 carrying its programmed time), NEVER the planner's internal plan ideal.
 
@@ -56,12 +56,12 @@ def _router(req, timeout=None):
         _STUB["ann_query"] = data.decode()
         hits = [_STUB["ann"]] if _STUB.get("ann") else []
         return _Resp({"hits": {"hits": hits}})
-    if b'"terms": {"timer_action"' in data:   # §32 announced-cancel query (unique key shape)
+    if b'"terms": {"timer_action"' in data:   # announced-cancel query (unique key shape)
         _STUB["cancel_query"] = data.decode()
         c = _STUB.get("cancel")
         return _Resp({"hits": {"hits": [c] if c else []}})
     if b"reach_blocked" in data and b"reach_restored" in data:
-        # owner order 2026-11-12: actor reachability (dedicated size-1 query)
+        # actor reachability (dedicated size-1 query)
         _STUB["reach_query"] = data.decode()
         r = _STUB.get("reach")
         return _Resp({"hits": {"hits": [r] if r else []}})
@@ -107,7 +107,7 @@ def _push(text, ts):
 
 
 def test_push_queries_ask_for_both_kind_eras(payload_env):
-    """Owner ruling 2026-11-04 (translate + compatibility): the stored kind is
+    """Translate + compatibility: the stored kind is
     the stable English key (NIGHT PLAN) while history carries the former
     German values (NACHTPLAN) — every push query must ask for BOTH, so the
     plan/ideal context never loses the older events."""
@@ -137,8 +137,8 @@ def test_announced_comes_from_last_write_confirmed_programming(payload_env):
 
 def test_absence_rule_no_time_bearing_write_never_renders_plan_ideal_as_announced(
         payload_env):
-    """THE bug regression (owner find 2026-10-26): journal holds no
-    programmed time (reality until tonight) → announced is None, and the
+    """THE bug regression: journal holds no
+    programmed time → announced is None, and the
     plan ideal 08:44 must NOT leak into the announced slot."""
     _STUB["ann"] = None
     _STUB["push"] = _push("Nachtplan final: timer 08:44",
@@ -187,7 +187,7 @@ def test_planned_ignores_act_inputs_even_without_announced_query(payload_env):
 
 
 def test_push_is_never_state_evidence_but_keeps_the_plan_ideal_field(payload_env):
-    """Ruling #10 (the 08:44 bug, history edition): a NIGHT PLAN push must
+    """Boundary truth (the 08:44 bug, history edition): a NIGHT PLAN push must
     NOT open a grid-ON window any more — it only feeds the labelled plan
     ideal field. Was: grid_on_windows==1 from the push anchor alone."""
     _STUB["push"] = _push("Nachtplan final: timer 08:44",
@@ -203,13 +203,13 @@ def test_write_confirmed_generation_becomes_the_on_window(payload_env):
     window at its fire time — the history boundary's future source. (The
     UNFIRED case is pinned in test_history_boundary_truth tier-1 helpers;
     no wall-clock dependence here: the fire anchor derives from its own
-    write ts and is in the past for every run from 2026-10-26 09:01 UTC.)"""
+    write ts and is in the past for every run.)"""
     _STUB["gens"] = [_ann_hit("2026-10-25T20:59:26+00:00", "09:01")]
     g = wp.fetch_gridguard()
     assert g["status"]["grid_on_windows"] == 1      # one passed generation
 
 
-# ---- §31/§32 ANNOUNCED-CANCEL (owner ruling round, sanctioned option 1) -------
+# ---- ANNOUNCED-CANCEL ---------------------------------------------------------
 # The page must NEVER advertise a timer the system itself disarmed: after the
 # newest ensure_on, a LATER ok disable/clear act → announced null. Same
 # semantic the tier-1 history path already uses (web_payload cancels); the
@@ -221,7 +221,7 @@ def _cancel_hit(ts, result="ok"):
 
 
 def test_announced_dies_with_a_later_ok_disarm(payload_env):
-    """THE §31 discrepancy regression: the live 11:38 gets cleared next
+    """THE discrepancy regression: the live 11:38 gets cleared next
     morning → the hero must stop claiming "fires device-side, no WiFi
     needed" the moment the disarm lands."""
     _STUB["ann"] = _ann_hit("2026-10-25T20:59:26+00:00", "11:38")
@@ -259,7 +259,7 @@ def test_a_failed_disarm_is_not_a_cancel(payload_env):
     assert d["announced_on_at"] == "11:38"
 
 
-# --- owner order 2026-11-12: actor reachability on the FIRST card -------------
+# --- actor reachability on the FIRST card --------------------------------------
 def test_actor_reachable_rides_the_newest_reach_transition(payload_env):
     """The Grid state card shows the actor reachability (True green / False
     amber) — sourced from the NEWEST reach transition via a dedicated

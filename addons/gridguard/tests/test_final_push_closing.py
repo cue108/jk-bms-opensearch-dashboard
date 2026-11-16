@@ -1,26 +1,25 @@
-"""§27 NIGHT PLAN "final" notification fix (owner report 2026-10-27, screenshot):
-the final push must fire at the eve's CLOSING — the first tick at/after
-window_end, when no further timer write for tonight is possible — and it must
-carry the CONCRETE write-confirmed armed time, with the plan ideal LABELLED
-when it differs.
+"""NIGHT PLAN "final" notification: the final push must fire at the eve's
+CLOSING — the first tick at/after window_end, when no further timer write for
+tonight is possible — and it must carry the CONCRETE write-confirmed armed
+time, with the plan ideal LABELLED when it differs.
 
-THE INCIDENT (this file IS the fixture): the old trigger (first final-phase
-tick, main.py pre-§27) pushed at 21:56 with 05:33; the eve then wrote 04:38
-(21:57), 05:52 (21:58) and 04:11 (21:59:58) — the phone showed 05:33 while
-the device was armed to 04:11 (page last-wins correct, push stale).
+TIMING (this file IS the fixture): the old trigger (first final-phase tick)
+pushed at 21:56 with 05:33 while the eve kept writing (04:38, 05:52, 04:11) —
+the phone showed 05:33 while the device ended armed to 04:11 (page last-wins
+correct, push stale).
 
-Two truths ride the eve (owner contract): the WRITE-CONFIRMED armed (device
-truth — verified write / identical program / within-deadband keep) and the
-PLAN IDEAL (the planner's crossing, re-projected every tick). The payload's
-planned_on_at = the LAST HH:MM in the newest NIGHT PLAN push text
-(web_payload.py:961-963) → the ideal must ride LAST in the push text, so the
-page keeps its "plan ideal" label semantics byte-for-byte.
+Two truths ride the eve: the WRITE-CONFIRMED armed (device truth — verified
+write / identical program / within-deadband keep) and the PLAN IDEAL (the
+planner's crossing, re-projected every tick). The payload's planned_on_at =
+the LAST HH:MM in the newest NIGHT PLAN push text (web_payload.py:961-963) →
+the ideal must ride LAST in the push text, so the page keeps its "plan ideal"
+label semantics byte-for-byte.
 
-F1 (review of 42adc55): RealDeps.push journals that text CAPPED at 60 chars
+JOURNAL CAP: RealDeps.push journals that text CAPPED at 60 chars
 (main.py push — the secret guard) and the audit dual-write ships the CAPPED
 rec into the events index the payload parses — so every night_plan* variant
 must also survive the full chain render → [:60] → payload regex (the teeth
-test at the bottom; it is the pin that would have caught F1).
+test at the bottom; it is the pin that would have caught the cap loss).
 """
 import re
 from datetime import datetime, timedelta
@@ -49,8 +48,8 @@ def _fire(now: datetime, hhmm: str) -> datetime:
 def _ah_for(now: datetime, target: datetime) -> float:
     """Craft the BMS counter (remaining_ah) so the REAL planner's crossing
     t_fire = now + available ÷ rate lands at `target` — the fixture drives the
-    production arithmetic; the SUT is never mocked. (Owner floor law 2026-11-13:
-    NO floor outside the UPS mode → the raw remaining IS the head.)"""
+    production arithmetic; the SUT is never mocked. (Floor law: NO floor
+    outside the UPS mode → the raw remaining IS the head.)"""
     rate = 300.0 * cfg.safety_factor / 11.0       # need × safety ÷ 11 h (INSUFF edges)
     hours = (target - now).total_seconds() / 3600.0
     return (rate * hours) / PACK_V
@@ -92,7 +91,7 @@ def _real_deps(monkeypatch):
     return deps
 
 
-# --- (a) TIMING: the incident ladder as the fixture ----------------------------
+# --- (a) TIMING: the stale-push ladder as the fixture --------------------------
 LADDER = [(D(21, 56), "05:33"), (D(21, 57), "04:38"), (D(21, 58), "05:52"),
           (datetime(2026, 10, 18, 21, 59, 58), "04:11")]
 
@@ -108,7 +107,7 @@ def test_no_final_push_before_the_last_write_settled_armed_at_closing():
         tick(cfg, st, deps, now)
         assert _finals(deps) == [], \
             f"final push already left at ladder tick {i} ({now:%H:%M:%S}) — before the last write"
-    # the ladder really programmed the incident values (last-wins, write world)
+    # the ladder really programmed those values (last-wins, write world)
     assert st.last_planned_fire.strftime("%H:%M") == "04:11"
     assert st.plan_ideal.strftime("%H:%M") == "04:11"
     tick(cfg, st, deps, CLOSING)                       # the eve's closing: phase NIGHT
@@ -125,10 +124,10 @@ def test_no_final_push_before_the_last_write_settled_armed_at_closing():
 
 # --- (b) CONTENT: armed leads, ideal labelled when differing -------------------
 class DeadbandFake(FakeDeps):
-    """§19 deadband world (tonight's physics): the DEVICE keeps its last write;
-    a handoff whose crossing moved within the 20-min deadband writes nothing —
-    the executor reports the DEVICE truth (armed_local), while the planner
-    re-projects its ideal every tick."""
+    """Deadband world (the write deadband's physics): the DEVICE keeps its
+    last write; a handoff whose crossing moved within the 20-min deadband
+    writes nothing — the executor reports the DEVICE truth (armed_local),
+    while the planner re-projects its ideal every tick."""
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
         self.device_armed = None
@@ -153,25 +152,25 @@ def test_final_push_leads_with_the_armed_and_labels_the_differing_plan_ideal():
     tick(cfg, st, deps, D(20, 1))                    # the eve's write: device 05:26
     deps.remaining_ah = _ah_for(D(21, 56), _fire(D(21, 56), "05:40"))
     tick(cfg, st, deps, D(21, 56))                   # ideal drifts 14 min ≤ deadband → no write
-    # THE DISCREPANCY (§27-A): armed = DEVICE truth (05:26), ideal = plan (05:40)
+    # THE DISCREPANCY: armed = DEVICE truth (05:26), ideal = plan (05:40)
     assert st.last_planned_fire.strftime("%H:%M") == "05:26"
     assert st.plan_ideal.strftime("%H:%M") == "05:40"
     tick(cfg, st, deps, CLOSING)
     finals = _finals(deps)
     assert len(finals) == 1
     text = finals[0]
-    # F1-shortened wording (≤60 for the journal cap) — pinned at the rendered
+    # shortened wording (≤60 for the journal cap) — pinned at the rendered
     # contract level; the full chain render → [:60] → payload regex is pinned
     # by test_night_plan_variant_survives_the_real_push_journal_cap below.
     assert "05:26" in text and "05:40" in text
     assert text.index("05:26") < text.index("05:40")   # armed FIRST (contract)
     assert "write-confirmed" in text                    # the armed's label
     assert "plan ideal" in text                         # the ideal's label
-    assert len(text) <= 60                              # journal cap (F1)
+    assert len(text) <= 60                              # journal cap
     # payload contract (web_payload.py:961-963): planned_on_at = the LAST time in
     # the newest NIGHT PLAN text → the ideal must ride LAST (page label unchanged)
     assert re.findall(r"\b(\d{1,2}:\d{2})\b", text)[-1] == "05:40"
-    # the final_plan audit gains both inputs (additive, §27-4)
+    # the final_plan audit gains both inputs (additive)
     fin = [f for e, f in deps.audits if e == "final_plan"]
     assert fin and fin[0]["inputs"] == {"armed": "05:26", "plan_ideal": "05:40"}
     assert fin[0]["action"] == {"type": "timer"}
@@ -288,7 +287,7 @@ def test_release_push_end_to_end_is_the_exact_old_text():
 def test_message_templates_de_and_en_shapes():
     assert msg("de", "night_plan_armed", armed="04:11") == \
         "Nachtplan final: Schaltzeitpunkt 04:11 (write-confirmed)"            # 56
-    # F1 (review): the ideal variants are SHORTENED to render ≤ 60 — the journal
+    # the ideal variants are SHORTENED to render ≤ 60 — the journal
     # caps the text at 60 and the payload parses the capped journal (cap chain
     # pinned below). de = 58 / en = 58 (EN drops the parens for cap margin).
     assert msg("de", "night_plan_armed_ideal", armed="04:11", ideal="05:33") == \
@@ -302,14 +301,14 @@ def test_message_templates_de_and_en_shapes():
     assert msg("en", "night_plan", plan="no timer") == "Night plan final: no timer"    # 26
 
 
-# --- F1 teeth (review of 42adc55): chain the 60-char push-journal cap ----------
+# --- journal-cap teeth: chain the 60-char push-journal cap ---------------------
 # RealDeps.push journals inputs.text = text[:60] (main.py — the SECRET GUARD,
 # contract-pinned in test_main_tick: the cap exists to keep the webhook URI and
 # friends out of the journal); the audit dual-write ships THAT capped rec into
 # the events index, and the payload reads planned_on_at from it. The phone gets
 # the FULL text — only the page's source is capped. Therefore EVERY variant must
 # hold over the CHAIN: render → [:60] → payload regex. This is the pin that
-# would have caught F1 (the 74-char DE template lost the ideal to the cap).
+# would have caught the cap loss (the 74-char DE template lost the ideal to the cap).
 NIGHT_PLAN_CASES = [
     ("de", "night_plan", dict(plan="no timer"), None),          # null rule over the cap
     ("en", "night_plan", dict(plan="no timer"), None),
@@ -342,12 +341,12 @@ def test_night_plan_variant_survives_the_real_push_journal_cap(
         assert kw["armed"] in journaled and kw["ideal"] in journaled
 
 
-# --- M1 (review of 42adc55): restart that missed the eve = NO push -------------
+# --- restart that missed the eve = NO push -------------------------------------
 def test_restart_that_missed_the_eve_stays_silent_at_the_closing():
     # eve_ran lives only in memory; restore_phase_flags restores the DURABLE
     # day flags (morning_done/night_over from the events index) but never the
     # eve roll — by design: THIS process never ran an eve, so it must not push
-    # a fresh-state claim at the closing (the pre-§27 code was silent in that
+    # a fresh-state claim at the closing (the old code was silent in that
     # situation too: its final block lived in _eve, which never ran).
     st = AppState()
     deps = _eve_deps()

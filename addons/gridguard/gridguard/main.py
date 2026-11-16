@@ -1,4 +1,4 @@
-"""GridGuard loop — the only clock in the system. See spec §5."""
+"""GridGuard loop — the only clock in the system."""
 from __future__ import annotations
 
 import sys
@@ -22,40 +22,38 @@ from .switchlink import ChannelError, CloudClient, LanClient, deactivate_grid_ti
 from .verdict import (EveVerdict, Phase, active_tier_on, corrected_min_cell_v,
                       current_phase, deep_floor_hit, reserve_tier,
                       voltage_floor_hit)
-from .weather import WeatherClient, ship_forecast, ship_outlook
+from .weather import WeatherClient, load_outlook, ship_forecast, ship_outlook
 
-DEFAULT_NIGHT_LEN_H = 11.0   # v4 §3 fallback when the learned edges are unknown
+DEFAULT_NIGHT_LEN_H = 11.0   # fallback when the learned night edges are unknown
 GRID_OFF_SUPPRESS_REASON = "grid-off rule active/contested — grid stays off, restrained as before"
-# L1 per-class yield (owner ruling 2026-10-25, option B): the pack shunt
-# measures solar DEPENDING ON THE GRID STATE (grid-ON day = gross solar into
-# the pack, grid-OFF day = net after covering the load) → the learning keeps
-# ONE factor per class, keyed by the day's grid-ON share (state_observed +
-# switch acts from the events index). Class: pct < GRID_OFF_CLASS_PCT →
-# "grid_off", pct >= GRID_ON_CLASS_PCT → "grid_on", between → "mixed",
-# unknown share → "unknown". The solar-day BOUNDARY rule stays curve-only
-# (owner ruling 2026-10-21 — this is LEARNING state-awareness only, v7
-# display-only, never a gate).
+# Per-class yield learning: the pack shunt measures solar DEPENDING ON THE
+# GRID STATE (grid-ON day = gross solar into the pack, grid-OFF day = net
+# after covering the load) → the learning keeps ONE factor per class, keyed
+# by the day's grid-ON share (state_observed + switch acts from the events
+# index). Class: pct < GRID_OFF_CLASS_PCT → "grid_off", pct >=
+# GRID_ON_CLASS_PCT → "grid_on", between → "mixed", unknown share →
+# "unknown". The solar-day boundary rule stays curve-only — this is learning
+# state-awareness only, display-only, never a gate.
 GRID_OFF_CLASS_PCT = 10.0
 GRID_ON_CLASS_PCT = 50.0
-# --- owner PHYSICS ruling 2026-10-26 (§19): the write DEADBAND ---------------
+# --- the write DEADBAND -------------------------------------------------------
 # Reprogram the actor only when the new crossing differs from the ARMED one by
-# more than WRITE_DEADBAND_MIN minutes (X = 20 min, OWNER-APPROVED 2026-10-26
-# — "yes, that's good, build it in"). The dedup in apply_plan gains threshold
+# more than WRITE_DEADBAND_MIN minutes. apply_plan's dedup gains threshold
 # semantics: |new − armed| <= X → silent skip (audited once as a noop
-# "within deadband"); beyond X → the write evicts the stale timer. Device
-# stability + trail noise: tonight's incident wrote 10 generations in 45 min.
+# "within deadband"); beyond X → the write evicts the stale timer. Rationale:
+# device stability + trail noise — unbounded rewrites churn the device and
+# flood the audit trail.
 WRITE_DEADBAND_MIN = 20
-# Phase B/C: the MEASURED onset is a LIVE horizon source only while FRESH —
-# its last completed span end must be at most this many hours old; beyond it
-# the sunless chain has stepped past (a step per sunless day = the owner's
-# "wrong by one day per sunless day") and the Phase-C forecast prediction
-# supplies the horizon instead. 36 h at the eve consult ≈ "the last measured
-# morning is not older than yesterday" (one sunless day tips over; the normal
-# same-day edge sits at ~12 h). NAMED KNOB (flagged in the wave report).
+# The MEASURED onset is a live horizon source only while FRESH — its last
+# completed span end must be at most this many hours old; beyond it the
+# sunless chain has stepped past (it slips one day per sunless day) and the
+# solar-day prediction supplies the horizon instead. 36 h at the eve consult
+# ≈ "the last measured morning is not older than yesterday" (one sunless day
+# tips over; the normal same-day edge sits at ~12 h).
 MEASURED_ONSET_MAX_AGE_H = 36.0
-# the Wh-conversion voltage average window (owner §20: "voltage average" for
-# the conversion only — a cheap cluster-side mean over the recent minutes; the
-# instantaneous pack voltage is a minor but real error term, so it is averaged)
+# the Wh-conversion voltage average window: a cheap cluster-side mean over
+# the recent minutes (the conversion only — the instantaneous pack voltage is
+# a minor but real error term, so it is averaged)
 PACK_V_AVG_MIN = 30
 # override recognition: the loop cadence is ~10 min; a longer observation gap
 # = actor-night / outage / restart → the first read after it RE-BASELINES
@@ -65,8 +63,8 @@ OVERRIDE_MAX_GAP = timedelta(minutes=45)
 
 
 def is_rescue_timer(t: dict) -> bool:
-    """v4 (R3''): a grid-ON timer = repeat timer that switches ON and is still
-    enabled. There is NO fixed atLocal anymore (t_fire is computed per eve and
+    """A grid-ON timer = repeat timer that switches ON and is still enabled.
+    There is NO fixed atLocal anymore (t_fire is computed per eve and
     programmed through apply_plan), so identity is direction + state —
     deactivated (enabled:0) inventory never counts as armed. Shared by
     RealDeps.timer_exists and the eve's carries-flip disarm (device truth
@@ -96,7 +94,7 @@ def crossing_move_min(sig_a: str | None, sig_b: str | None) -> int | None:
 
 
 def _measured_onset_base(spans: dict) -> datetime | None:
-    """§32 onset source PRIMARY: the MEASURED last completed solar night's
+    """Primary onset source: the MEASURED last completed solar night's
     END (_e = the array-onset datetime the eve already fetches — the system's
     own sunrise), as naive local wall time (the run() contract)."""
     if not spans:
@@ -116,19 +114,19 @@ def _onset_on_day(day: date, onset_h: float) -> datetime:
 def next_solar_onset_src(now: datetime, spans: dict, profile,
                          predicted: dict | None = None
                          ) -> tuple[datetime | None, str]:
-    """Phase B horizon source chain — the eve clamp's boundary WITH its label
-    (display-truth: the source rides the night_need audit; a prediction is a
+    """Next array-onset source chain — the eve clamp's boundary WITH its label
+    (display truth: the source rides the night_need audit; a prediction is a
     LABEL, never state):
     (1) MEASURED — the last completed solar-night span end stepped +24 h while
-        <= now (§32 primary), BUT only while fresh: age <=
+        <= now, BUT only while fresh: age <=
         MEASURED_ONSET_MAX_AGE_H, else the sunless chain has stepped past it
         and the measured edge no longer extends;
-    (2) PREDICTED — Phase C's solar_day_prediction (predicted True with an
+    (2) PREDICTED — solar_day_prediction (predicted True with an
         onset_h): onset_h anchored to its next occurrence after `now` —
         the sunless chain's horizon;
-    (3) PROFILE — the learned profile.array_onset_h (the existing §32
-        fallback, kept: owner ruling 9a1cb4a stays intact);
-    (4) None → no guess; the length clamp stays the last guard (§31/§32).
+    (3) PROFILE — the learned profile.array_onset_h (the existing
+        fallback);
+    (4) None → no guess; the length clamp stays the last guard.
     Returns (onset, source) with source ∈ measured | predicted | profile |
     none."""
     base = _measured_onset_base(spans)
@@ -155,22 +153,21 @@ def next_solar_onset_src(now: datetime, spans: dict, profile,
 
 def next_solar_onset(now: datetime, spans: dict, profile,
                      predicted: dict | None = None) -> datetime | None:
-    """Owner ruling §31 (§32 source order): the ABSOLUTE next array-onset
-    AFTER `now` (naive local) — the eve-clamp's boundary (§31/§32 contract;
-    see next_solar_onset_src for the labelled chain). PRIMARY = the measured
-    span end stepped +24 h while fresh (≤ MEASURED_ONSET_MAX_AGE_H), else the
-    Phase-C predicted onset, else the learned profile hour anchored to the
-    coming local day, else None — no guess; the planner's length-clamp stays
-    the sole guard."""
+    """The ABSOLUTE next array-onset AFTER `now` (naive local) — the
+    eve-clamp's boundary; see next_solar_onset_src for the labelled chain.
+    PRIMARY = the measured span end stepped +24 h while fresh (≤
+    MEASURED_ONSET_MAX_AGE_H), else the predicted onset, else the learned
+    profile hour anchored to the coming local day, else None — no guess; the
+    planner's length-clamp stays the sole guard."""
     return next_solar_onset_src(now, spans, profile, predicted)[0]
 
 
 def solar_onset_on(day: date, spans: dict, profile) -> datetime | None:
-    """Owner ruling §31/§32 (Layer 2): the array-onset BELONGING to `day`
-    (naive local). The measured base steps ±24 h until the DATE matches — the
-    seasonal drift shifts the CLOCK by minutes, never the date (the anchoring
-    rule); the learned profile hour lands on the date directly. None = no edge
-    known → the clearing step stays silent (no guess)."""
+    """The array-onset BELONGING to `day` (naive local). The measured base
+    steps ±24 h until the DATE matches — the seasonal drift shifts the CLOCK
+    by minutes, never the date (the anchoring rule); the learned profile hour
+    lands on the date directly. None = no edge known → the clearing step
+    stays silent (no guess)."""
     base = _measured_onset_base(spans)
     if base is not None:
         while base.date() < day:
@@ -189,33 +186,33 @@ class AppState:
     night_over: bool = False
     rescue_timer_set: bool = False
     final_pushed: bool = False
-    eve_ran: bool = False           # §27: TODAY's eve consult actually ran — the
+    eve_ran: bool = False           # TODAY's eve consult actually ran — the
                                     # gate for the closing final push (a restart
                                     # that never reached the eve must not push
                                     # fresh-state claims); reset at day rollover
     evening_verdict: str | None = None
     emergency_ack: date | None = None
-    low_capacity_ack: date | None = None   # owner2026-10-25: the two floors ack
+    low_capacity_ack: date | None = None   # the two floors ack
                                            # SEPARATELY — a capacity event must never
                                            # suppress the emergency (no interference)
-    floor_blocked_audit: date | None = None  # dynamic ruling: one blocked-audit/day
+    floor_blocked_audit: date | None = None  # one blocked-audit/day
                                              # that is NOT an ack — the floor still
                                              # fires the moment the link returns
     deep_pushed: date | None = None          # one danger push per day while blind
-    current_date: date | None = None       # F2: key of the day-scoped latches
-    rescue_fallback: bool | None = None    # F3: actual outcome of the grid-ON fallback
-    last_read_fail_push: datetime | None = None   # hotfix: throttle human spam, audit stays full
-    reach_blocked: bool = False          # v7 observability: the reach-outage transition latch
-    last_planned_fire: datetime | None = None     # §27: WRITE-CONFIRMED armed (device
-                                                  # truth — stamped by the executor; v3
-                                                  # R3'': t_fire actually applied, today)
-    plan_ideal: datetime | None = None     # §27: the planner's LATEST crossing (intent,
+    current_date: date | None = None       # key of the day-scoped latches
+    rescue_fallback: bool | None = None    # actual outcome of the grid-ON fallback
+    last_read_fail_push: datetime | None = None   # throttle human spam, audit stays full
+    reach_blocked: bool = False          # the reach-outage transition latch
+    last_planned_fire: datetime | None = None     # WRITE-CONFIRMED armed (device
+                                                  # truth — stamped by the executor;
+                                                  # t_fire actually applied, today)
+    plan_ideal: datetime | None = None     # the planner's LATEST crossing (intent,
                                            # re-projected every eve tick — separate from
                                            # the armed; the final push labels it when it
                                            # differs from the write-confirmed time)
     last_observed_switch: str | None = None   # override recognition: last READ actor state
     last_observed_at: datetime | None = None  # … and when (a gap → silent re-baseline)
-    # --- owner ruling 2026-10-25 (part 3): weather-conditional RESERVE TIERS ---
+    # --- weather-conditional RESERVE TIERS -------------------------------------
     reserve_tier_pct: int = 0          # the tier (% of BMS SOC) — set at the eve for
                                        # the coming day, NOT cleared at day rollover,
                                        # overwritten at the next eve (and re-evaluated
@@ -231,41 +228,36 @@ class AppState:
 
 def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = False) -> None:
     """One decision step. `deps` is duck-typed (RealDeps or a test fake)."""
-    # --- F2: day rollover BEFORE the phase runs (phase reads morning_done!) ---
+    # --- day rollover BEFORE the phase runs (phase reads morning_done!) ---
     if st.current_date is None:
         st.current_date = now.date()       # first tick establishes the day (fresh latches)
     elif st.current_date != now.date():
         st.current_date = now.date()
         st.morning_done = False
         st.final_pushed = False
-        st.eve_ran = False          # §27: the closing push needs TODAY's eve
+        st.eve_ran = False          # the closing push needs TODAY's eve
         st.evening_verdict = None
         st.rescue_fallback = None
-        st.last_planned_fire = None       # v3: "set today" scope for the FINAL text
-        st.plan_ideal = None              # §27: same day scope as the armed
+        st.last_planned_fire = None       # "set today" scope for the FINAL text
+        st.plan_ideal = None              # same day scope as the armed
         st.rescue_timer_set = deps.timer_exists()   # re-sync flag with device truth
     phase = current_phase(now, cfg, st.morning_done, st.night_over)
     deps.audit("tick", phase=phase.value)
 
     if phase is Phase.NIGHT:
-        # owner REFERENCE-LOAD model (Phase A): the OVERNIGHT RE-ESTIMATION
-        # runs FIRST in the NIGHT branch, so the §27 closing push below (and
-        # every later announced/plan read) states the WRITE truth after it.
+        # the OVERNIGHT RE-ESTIMATION runs FIRST in the NIGHT branch, so the
+        # closing push below (and every later announced/plan read) states the
+        # WRITE truth after it.
         _night_resolve(cfg, st, deps, now)
-        # --- §27 owner contract (incident 2026-10-27): the FINAL push fires at
-        # the eve's CLOSING — the FIRST tick at/after window_end, i.e. the phase
-        # transition out of FINAL (verdict.current_phase: t >= window_end → NIGHT,
-        # and _eve only ever runs in EVE_PLAN/FINAL), so no further timer write
-        # for tonight is possible and the latches are settled. The old trigger
-        # (first final-phase tick) pushed at 21:56 while the eve kept writing
-        # until 21:59:58 — the owner received "timer 05:33" while the device was
-        # armed to 04:11 (handoff §27). Chosen honestly over "the last FINAL
-        # tick": the closing is decided by the phase function alone (single
-        # source), while a "last FINAL tick" would need cadence arithmetic that
-        # cannot know the next tick's instant.
+        # --- the FINAL push fires at the eve's CLOSING — the FIRST tick at/after
+        # window_end, i.e. the phase transition out of FINAL (verdict.current_phase:
+        # t >= window_end → NIGHT, and _eve only ever runs in EVE_PLAN/FINAL), so
+        # no further timer write for tonight is possible and the latches are
+        # settled. Chosen over "the last FINAL tick": the closing is decided by
+        # the phase function alone (single source), while a "last FINAL tick"
+        # would need cadence arithmetic that cannot know the next tick's instant.
         # eve_ran = the eve actually rolled today (a restart that never reached
-        # the eve must not push fresh-state claims — the pre-§27 code never
-        # pushed in that situation either: phase was NIGHT, not FINAL);
+        # the eve must not push fresh-state claims);
         # final_pushed = ONE push per eve/day (re-armed by the day rollover).
         if st.eve_ran and not st.final_pushed and now.time() >= cfg.window_end:
             st.final_pushed = True
@@ -274,13 +266,13 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
             ideal_s = (st.plan_ideal.strftime("%H:%M")
                        if st.plan_ideal is not None else None)
             if armed_s is None:
-                # v3 R3'' fallback kept verbatim: no write-confirmed timer this
-                # eve → honest "no timer" (the payload's planned_on_at stays
-                # null on this text — web_payload.py excludes "no timer").
+                # no write-confirmed timer this eve → honest "no timer" (the
+                # payload's planned_on_at stays null on this text —
+                # web_payload.py excludes "no timer").
                 deps.push("NIGHT PLAN", msg(cfg.msg_lang, "night_plan",
                                            plan="no timer"))
             elif ideal_s is not None and ideal_s != armed_s:
-                # §27: BOTH truths — armed as the headline, the planner's ideal
+                # BOTH truths — armed as the headline, the planner's ideal
                 # LABELLED when it differs. Order is load-bearing: the payload
                 # reads the LAST HH:MM of the newest NIGHT PLAN text as
                 # planned_on_at (web_payload.py) → the ideal rides LAST.
@@ -289,7 +281,7 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
             else:
                 deps.push("NIGHT PLAN", msg(cfg.msg_lang, "night_plan_armed",
                                            armed=armed_s))
-            # §27-4: additive inputs — both truth sources stay readable in the
+            # additive inputs — both truth sources stay readable in the
             # journal (the event's verdict/action shape is unchanged).
             deps.audit("final_plan", verdict=st.evening_verdict or "unknown",
                        action={"type": "timer" if armed_s else "none"},
@@ -300,31 +292,29 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
             return
         return
 
-    # --- R4'/R6': read-FIRST gate (hotfix mechanism moved from _morning) ---
+    # --- read-FIRST gate ---
     try:
         switch_state, timers = deps.read_state()
-    except (ChannelError, RuntimeError) as e:   # deviation3: fake nets raw RuntimeError (401 shape)
+    except (ChannelError, RuntimeError) as e:   # nets raw RuntimeError too (401 shape)
         deps.audit("read_state_failed", result=str(e))   # audit = full fidelity, every tick
-        # hotfix: push = human signal, at most 1 per 6h (live 2026-10-18 401 spam)
+        # push = human signal, throttled to 1 per 6h (spammy 401 storms)
         if st.last_read_fail_push is None or \
                 (now - st.last_read_fail_push) >= timedelta(hours=6):
             deps.push("NO CHANNEL", msg(cfg.msg_lang, "no_channel", action="read"))
             st.last_read_fail_push = now
         return
 
-    # --- state journal + manual-override recognition (owner2026-10-21/22) ---
-    # DATA QUALITY ASSURANCE (owner voice 2026-10-22, binding): inside the
-    # known WLAN-off window (22:00–10:00) nobody CAN switch — no path to the
-    # actor — and a cloud read then returns the device's LAST KNOWN state,
-    # never an actor response. Recording such reads produced wrong data
-    # ("off at 09:53") and a wrong conclusion (the false HAND-ON-THE-SWITCH
-    # at 10:03). Therefore state observations — baseline, transitions AND the
-    # override gap clock — run ONLY on a reachable uplink; stale reads leave
-    # no trace. The gap then always anchors at the last ACTOR-GROUNDED
-    # observation, so the first live read after a blackout silently
-    # re-baselines (device timers fire precisely when unreachable — that IS
-    # the pre-programming working), while a change inside a live session
-    # still counts as a hand (manual_override + push).
+    # --- state journal + manual-override recognition ---
+    # DATA QUALITY: inside the known WLAN-off window (22:00–10:00) nobody CAN
+    # switch — no path to the actor — and a cloud read then returns the device's
+    # LAST KNOWN state, never an actor response. Recording such reads produced
+    # wrong data and a wrong conclusion (a false HAND-ON-THE-SWITCH). Therefore
+    # state observations — baseline, transitions AND the override gap clock —
+    # run ONLY on a reachable uplink; stale reads leave no trace. The gap then
+    # always anchors at the last ACTOR-GROUNDED observation, so the first live
+    # read after a blackout silently re-baselines (device timers fire precisely
+    # when unreachable — that IS the pre-programming working), while a change
+    # inside a live session still counts as a hand (manual_override + push).
     reach_ok = deps.reachable()   # ONE probe feeds journal + floors + observability
     if reach_ok:
         if st.last_observed_switch is None:
@@ -343,34 +333,32 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
         st.last_observed_switch = switch_state
         st.last_observed_at = now
 
-    # --- universal emergency IN-guard (R1', all awake phases) ---
+    # --- universal emergency IN-guard (all awake phases) ---
     try:
         reading = deps.bms_latest()
-    except Exception as e:   # decision-path rule2026-10-23: ANY failure class
-        # (incl. data-shape types like TypeError — the20:07 series) nets to the
-        # same conservative fallback + a VISIBLE audit; the decision survives
-        # its instrumentation.
+    except Exception as e:   # ANY failure class (incl. data-shape types like
+        # TypeError) nets to the same conservative fallback + a VISIBLE audit;
+        # the decision survives its instrumentation.
         deps.audit("bms_unavailable", result=str(e))
         reading = None
     deep = reading is not None and deep_floor_hit(reading.min_cell_v, cfg)
-    # owner ruling2026-10-25 (option 1): the capacity trigger is VOLTAGE-ONLY —
-    # the corrected worst-cell voltage decides; the BMS counter is display-only
-    # (it cut the night early at 5.0 Ah while cells rested at 3.269 V ≈ 10 %).
+    # the capacity trigger is VOLTAGE-ONLY — the corrected worst-cell voltage
+    # decides; the BMS counter is display-only (it cut the night early while
+    # cells still rested near 10 %).
     low = reading is not None and voltage_floor_hit(reading.min_cell_v,
                                                     reading.charge_a, cfg)
-    # owner2026-10-25 (no interference): the two floors ack SEPARATELY — a
-    # capacity event must never suppress the emergency of the same day.
+    # the two floors ack SEPARATELY — a capacity event must never suppress
+    # the emergency of the same day.
     deep_unacked = deep and st.emergency_ack != now.date()
     low_unacked = low and st.low_capacity_ack != now.date()
     if (deep_unacked or low_unacked) and switch_state != "on":
         if not reach_ok:
-            # owner2026-10-25 (DYNAMIC ruling): NO fixed outage config — a
-            # usage-variable parameter (the WiFi schedule) must never live in
-            # env; the LIVE link is the only truth. While no path exists: no
-            # dialing (05:40 evidence), audit ONCE per day via a latch that is
-            # deliberately NOT an ack — so the floor FIRES DIRECTLY THE MOMENT
-            # THE LINK RETURNS (09:10 evidence: reach_restored → act in 1 s),
-            # instead of waiting for programmed plans or tomorrow.
+            # NO fixed outage config — a usage-variable parameter (the WiFi
+            # schedule) must never live in env; the LIVE link is the only
+            # truth. While no path exists: no switching, audit ONCE per day via
+            # a latch that is deliberately NOT an ack — so the floor FIRES THE
+            # MOMENT THE LINK RETURNS, instead of waiting for programmed plans
+            # or tomorrow.
             if st.floor_blocked_audit != now.date():
                 st.floor_blocked_audit = now.date()
                 _inputs = {"min_cell_v": reading.min_cell_v,
@@ -395,13 +383,13 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
             st.emergency_ack = now.date()
         if low_unacked:
             st.low_capacity_ack = now.date()
-        # §12.2 "on every intervention": best-effort timer clear BEFORE the ON —
-        # deliberate difference to the two switch_off releases (collision-first
-        # ABORT there): a release is release-critical and must not fight an
-        # armed timer; the emergency must NEVER be blocked by a failing clear
-        # — switch_on runs either way, only the clear flag rides the audit.
+        # best-effort timer clear BEFORE the ON — deliberate difference to the
+        # two switch_off releases (collision-first ABORT there): a release is
+        # release-critical and must not fight an armed timer; the emergency
+        # must NEVER be blocked by a failing clear — switch_on runs either way,
+        # only the clear flag rides the audit.
         timer_clear = deps.act("disable_on_timers")
-        ok = deps.act("switch_on", require_verify=True)   # F4: read-back verify (R6)
+        ok = deps.act("switch_on", require_verify=True)   # read-back verify
         if ok:
             st.last_observed_switch = "on"   # override recognition: our own act = the new baseline
         if deep:                       # dual push titles: deep floor vs capacity floor
@@ -420,17 +408,15 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
                            "floor_v": cfg.true_floor_v,
                            "remaining_ah": reading.remaining_ah,   # display-only
                            "charge_a": reading.charge_a,
-                           "timer_clear": timer_clear})   # §12.2 best-effort flag
+                           "timer_clear": timer_clear})   # best-effort flag
         return
 
-    # v7 observability (lesson2026-10-21): a reach-gate silently blocking the awake
-    # rules hid a WHOLE morning (the host WLAN dongle vanished) — announce the
-    # transition, guarded so a stuck outage audits exactly once.
+    # a reach-gate silently blocking the awake rules can hide a WHOLE morning —
+    # announce the transition, guarded so a stuck outage audits exactly once.
     reach_ok = deps.reachable()
-    # owner bug 2026-11-10: the latch was gated to switch=="on" — an uplink
-    # outage while the grid stayed OFF announced NOTHING (the silent tier-stop
-    # of the 20:07 incident had no reach_blocked to explain it). Announce EVERY
-    # transition; the guard still makes it once per outage, not per tick.
+    # announce EVERY transition — an uplink outage while the grid stays OFF must
+    # be visible too (a switch=="on"-gated latch announced nothing). The guard
+    # still makes it once per outage, not per tick.
     if reading is not None and not reach_ok:
         if not st.reach_blocked:
             st.reach_blocked = True
@@ -439,33 +425,32 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
         st.reach_blocked = False
         deps.audit("reach_restored")
 
-    # --- owner ruling §31 (2026-10-28) + §32: MORNING-CLEARING of an OBSOLETE
-    # post-sunrise grid-ON program. The ON-timer is the WiFi-BLACKOUT
-    # INSURANCE ONLY; once actor contact exists after sunrise a programmed
-    # grid-on is obsolete (a direct reaction exists). STANDALONE step —
-    # REGARDLESS of switch_state, OUTSIDE the grid-off gate (the yesterday-find:
-    # the grid-off release only runs on switch==on; tomorrow the grid = OFF → the
-    # armed 11:38 would fire blind without this). PHASE SCOPE (§32): only
-    # MORNING/DAY_HOLD — inside EVE_PLAN/FINAL the step would fight the eve's
-    # own fresh arming every poll (the eve self-heals stale timers via
-    # write-evict + the carry-flip disarm instead). CLEAR SCOPE (§32
-    # carve-out): ONLY when EVERY armed ON-timer's fire time-of-day is >= the
-    # onset time-of-day (fire and its onset share the occurrence date, so the
-    # date cancels — the honest rule across midnight: a 11:38 counts as
-    # post-sunrise on any day, a pre-dawn 05:30 never does; unparseable
-    # device truth = not comparable = never cleared); the PRE-DAWN timers =
-    # the blackout insurance = untouched (contact returning at 23:31 must not
-    # strip tonight's blind-firing insurance — a future blackout is unknowable
-    # and the night's probe-cadence lag is exactly what the insurance
-    # covers). Placement (§32): AFTER the emergency block (safety first),
-    # BEFORE the tier/grid-off machinery — overlaps self-resolve (whoever clears
-    # first; the other then sees no armed timer). No onset edge known → NO
-    # decision (no guess — the consult side nets to silence).
+    # --- MORNING-CLEARING of an OBSOLETE post-sunrise grid-ON program. The
+    # ON-timer is the WiFi-BLACKOUT INSURANCE ONLY; once actor contact exists
+    # after sunrise a programmed grid-on is obsolete (a direct reaction
+    # exists). STANDALONE step — REGARDLESS of switch_state, OUTSIDE the
+    # grid-off gate (the grid-off release only runs on switch==on; tomorrow the
+    # grid = OFF → the armed post-sunrise timer would fire blind without this).
+    # PHASE SCOPE: only MORNING/DAY_HOLD — inside EVE_PLAN/FINAL the step would
+    # fight the eve's own fresh arming every poll (the eve self-heals stale
+    # timers via write-evict + the carry-flip disarm instead). CLEAR SCOPE:
+    # ONLY when EVERY armed ON-timer's fire time-of-day is >= the onset
+    # time-of-day (fire and its onset share the occurrence date, so the date
+    # cancels — the honest rule across midnight: a 11:38 counts as post-sunrise
+    # on any day, a pre-dawn 05:30 never does; unparseable device truth = not
+    # comparable = never cleared); the PRE-DAWN timers = the blackout insurance
+    # = untouched (contact returning late must not strip tonight's
+    # blind-firing insurance — a future blackout is unknowable and the night's
+    # probe-cadence lag is exactly what the insurance covers). Placement:
+    # AFTER the emergency block (safety first), BEFORE the tier/grid-off
+    # machinery — overlaps self-resolve (whoever clears first; the other then
+    # sees no armed timer). No onset edge known → NO decision (no guess — the
+    # consult side nets to silence).
     if phase in (Phase.MORNING, Phase.DAY_HOLD) and reach_ok:
         try:
             _sp = deps.solar_night_windows()
             _pf = deps.night_profile()
-        except Exception:                       # noqa: BLE001 — consult side rule2026-10-23
+        except Exception:                       # noqa: BLE001 — consult side
             _sp, _pf = {}, None                 # = no edge → no decision
         _onset = solar_onset_on(now.date(), _sp, _pf)
         _armed = [t for t in timers if is_rescue_timer(t)]
@@ -481,13 +466,13 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
                                    "armed": [t.get("atLocal") for t in _armed],
                                    "onset": _onset.isoformat()})
                 if _ok:
-                    # §27 fields → None: the next planned/announced reads tell
-                    # the truth (page + push claim only what is armed)
+                    # armed/ideal fields → None: the next planned/announced
+                    # reads tell the truth (page + push claim only what is armed)
                     st.last_planned_fire = None
                     st.plan_ideal = None
                     st.rescue_timer_set = False
 
-    # --- DRAIN STOP AT THE RESERVE TIER (owner ruling 2026-10-25, part 3) ------
+    # --- DRAIN STOP AT THE RESERVE TIER ---------------------------------------
     # While the battery DISCHARGES (grid OFF), reaching the tier ends the drain —
     # grid back ON at the raised level. That is the INTENDED shallow cycle around
     # the tier (outage probability rises with bad weather → everything below the
@@ -502,23 +487,21 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
     # release block and evaluated on the AS-READ state, so one tick can never
     # stop and release at once.
     tier_stopped = False
-    # BUG-FIX (owner2026-10-25, 10:32 live incident): the stop must guard the
-    # DISCHARGE DIRECTION — the design says "the DISCHARGE stops at the tier",
-    # and the state-only condition fired while the pack was CHARGING at +13 A
-    # from solar (Ah climbed every minute; reason text claimed 'tier reached'
-    # at SOC 11%). Now: only a genuine discharge (charge_a below −solar_noise,
-    # ingest sign positive = charging) below/at the tier stops the drain; a
-    # charging or flat pack is left alone — the release gate keeps its hold and
-    # the deep floors stay the safety net.
-    # owner bug 2026-11-10 (20:07 incident): NO reach gate here — RealDeps.act
-    # is CLOUD-first (set_switch over eth0) with LAN fallback and self-honest
-    # failure audits (NO CHANNEL / verify_failed); the wlan operstate gate only
-    # blocked a viable cloud act: dongle wlx… down while SOC 24 <= tier 30 ->
-    # zero grid_on events all evening. A dead path still fails VISIBLY through
-    # act()'s own audits; the drain-stop intent is unconditional on contact.
-    # owner DAY-OF-ACTION law 2026-11-14: the drain-stop enforces the tier OF
-    # TODAY (the forecast day itself) — a latched window decision for another
-    # day (the day after the bad weather) must never stop today's discharge.
+    # the stop must guard the DISCHARGE DIRECTION — a state-only condition
+    # fired while the pack was CHARGING from solar (Ah climbed while the
+    # reason text claimed 'tier reached'). Now: only a genuine discharge
+    # (charge_a below −solar_noise, ingest sign positive = charging)
+    # below/at the tier stops the drain; a charging or flat pack is left alone
+    # — the release gate keeps its hold and the deep floors stay the safety net.
+    # NO reach gate here — RealDeps.act is CLOUD-first (set_switch over eth0)
+    # with LAN fallback and self-honest failure audits (NO CHANNEL /
+    # verify_failed); a wlan operstate gate only blocked viable cloud acts (a
+    # down dongle with SOC <= tier produced zero grid_on events all evening). A
+    # dead path still fails VISIBLY through act()'s own audits; the drain-stop
+    # intent is unconditional on contact.
+    # the drain-stop enforces the tier OF TODAY (the forecast day itself) — a
+    # latched window decision for another day (the day after the bad weather)
+    # must never stop today's discharge.
     tier_now = _active_tier_pct(cfg, st, deps, now.date())
     if (reading is not None and switch_state == "off"
             and tier_now > 0 and reading.soc is not None
@@ -526,13 +509,13 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
             and reading.charge_a is not None
             and reading.charge_a < -cfg.solar_noise_a):
         ok = False
-        if deps.act("disable_on_timers"):      # T1 collision-first (grid-off order)
+        if deps.act("disable_on_timers"):      # collision-first (grid-off order)
             ok = deps.act("switch_on", require_verify=True,
                           reason=f"below reserve tier (BMS SOC {reading.soc:g}% "
                                  f"<= {tier_now}%) — stopping the "
                                  f"discharge, not an emergency")
             if ok:
-                switch_state = "on"            # FIX1 mirror: _eve sees the fresh state
+                switch_state = "on"            # mirror: _eve sees the fresh state
                 st.last_observed_switch = "on"  # our own act = the new observation baseline
                 tier_stopped = True            # … and the grid-off release stays out THIS tick
         deps.audit("grid_on", action={"type": "switch_on"},
@@ -540,29 +523,28 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
                    inputs={"soc": reading.soc, "tier_pct": tier_now,
                            "ground": "tier"})
 
-    # --- grid-off-gate (T1 collision-first; the ONLY grid-off path, all awake phases) ---
+    # --- grid-off-gate (collision-first; the ONLY grid-off path, all awake phases) ---
     if (not tier_stopped) and reading is not None and reach_ok and switch_state == "on":
         window = deps.bms_solar_window()
-        # §13 v7 DOCTRINE (owner2026-10-21): DAY has NO prediction and NO static
-        # gate — stored solar is simply drained into the load (room for new harvest).
-        # owner ruling2026-10-25 (L2 wave1): the ONLY FLOOR hold = the VOLTAGE floor
-        # (corrected min cell > TRUE_FLOOR_V — a physics invariant), unknown data
-        # (never guess), and the deep 2.90 V backstop. The BMS counter no longer
-        # stops the drain (it hid ~15-20 Ah below the counter's 5 Ah "floor").
-        # owner ruling2026-10-25 (part 3): BESIDE that floor the RESERVE-TIER
-        # release gate adds a soft BMS-SOC hold (`and _tier_release_ok`, below) —
-        # while a tier is active the release needs soc at/above it; the floors
-        # underneath are unchanged and remain the safety spine.
-        # owner rules 2026-11-13 (the minute-flap): the DRAIN release needs
-        # the same reality anchor as the eve — the projected grid-off span
-        # (head ÷ reference rate) must reach release_min_span_min (30) min.
-        # Near the floor the LiFePO4 REBOUND misled the plain voltage
-        # check (ON = no load = the cells rebound above the floor) and this
-        # gate oscillated with the eve's crossing timers in ~1-minute ON
-        # cycles. Unknown rate/floor → the v7 doctrine holds (the drain above
-        # the floor/tier stays unconditional — no reference to anchor
-        # against); the ANCHOR is an addition when the reference exists
-        # (production: always, via the tier3 hold).
+        # DAY DOCTRINE: DAY has NO prediction and NO static gate — stored
+        # solar is simply drained into the load (room for new harvest).
+        # the ONLY FLOOR hold = the VOLTAGE floor (corrected min cell >
+        # TRUE_FLOOR_V — a physics invariant), unknown data (never guess), and
+        # the deep 2.90 V backstop. The BMS counter does not stop the drain
+        # (it hid ~15-20 Ah below the counter's 5 Ah "floor").
+        # BESIDE that floor the RESERVE-TIER release gate adds a soft BMS-SOC
+        # hold (`and _tier_release_ok`, below) — while a tier is active the
+        # release needs soc at/above it; the floors underneath are unchanged
+        # and remain the safety spine.
+        # the DRAIN release needs the same reality anchor as the eve — the
+        # projected grid-off span (head ÷ reference rate) must reach
+        # release_min_span_min (30) min. Near the floor the LiFePO4 REBOUND
+        # misleads the plain voltage check (ON = no load = the cells rebound
+        # above the floor) and this gate oscillated with the eve's crossing
+        # timers in ~1-minute ON cycles. Unknown rate/floor → the doctrine
+        # holds (the drain above the floor/tier stays unconditional — no
+        # reference to anchor against); the ANCHOR applies when the reference
+        # exists.
         _span_ok = True
         try:
             _rate = (deps.reference_load() or {}).get("wh_h")
@@ -577,26 +559,26 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
             _span_ok = True
         if not voltage_floor_hit(reading.min_cell_v, reading.charge_a, cfg) \
                 and _tier_release_ok(cfg, st, deps, reading, tier_now) and _span_ok:
-            # T1 mandated order: collision first — abort the grid-off sequence on False
+            # collision-first order: abort the grid-off sequence on False
             if deps.act("disable_on_timers"):
-                ok = deps.act("switch_off", require_verify=True)   # R6 chain
+                ok = deps.act("switch_off", require_verify=True)   # read-back verified
                 solar = window[-1] if window and window[-1] is not None \
                     else (reading.charge_a or 0.0)
                 deps.audit("grid_off", action={"type": "switch_off"},
                            result="ok" if ok else "failed",
                            inputs={"remaining_ah": reading.remaining_ah,
-                                   # owner2026-10-25: the floor is VOLTAGE now
+                                   # the floor is VOLTAGE (not the Ah counter)
                                    "floor_v": cfg.true_floor_v,
                                    "min_cell_corr": corrected_min_cell_v(
                                        reading.min_cell_v, reading.charge_a, cfg),
                                    "solar_a": solar, "soc": reading.soc,
-                                   # §13 v7: the doctrine clause that fired
+                                   # the drain-doctrine clause that fired
                                    "ground": "drain"})
                 if ok:
                     st.morning_done = True
-                    # review FIX1: the grid-off write was verified — _eve must evaluate
-                    # the SAME tick against this fresh "off" (not the as-read "on");
-                    # failed switch_off keeps the state as read.
+                    # the grid-off write was verified — _eve must evaluate
+                    # the SAME tick against this fresh "off" (not the as-read
+                    # "on"); failed switch_off keeps the state as read.
                     switch_state = "off"
                     st.last_observed_switch = "off"   # override recognition: our own act = baseline
                     deps.push("MAIN OFF", msg(cfg.msg_lang, "grid_off",
@@ -612,13 +594,13 @@ def tick(cfg: Config, st: AppState, deps, now: datetime, *, probe_due: bool = Fa
 
 
 def _night_resolve(cfg: Config, st: AppState, deps, now: datetime) -> None:
-    """OVERNIGHT RE-ESTIMATION (owner REFERENCE-LOAD model, Phase A 2026-10-30).
+    """Overnight re-estimation of the armed grid-ON timer.
 
-    TRUE OPERATING WINDOW (review F1): this step runs in the NIGHT phase only
+    TRUE OPERATING WINDOW: this step runs in the NIGHT phase only
     (never EVE/FINAL — those keep their own logic), and on a NORMAL night
     that phase reaches it in exactly two places:
     * the PRE-BLACKOUT TAIL ≈22:00–23:00 local — after the eve's closing
-      write and before the owner's WiFi blackout (reachable() = False ≈
+      write and before the WiFi blackout (reachable() = False ≈
       23:00–08:00, reach.py = wlan operstate); once night_over latches at
       the reachable 22:00 probe, every post-midnight tick is Phase.MORNING
       (verdict.py), so 00:00–09:00 is structurally NOT this step's window on
@@ -627,37 +609,34 @@ def _night_resolve(cfg: Config, st: AppState, deps, now: datetime) -> None:
       in NIGHT phase (e.g. night_over never latched because the link died
       before the 22:00 probe, then contact returns pre-dawn).
     The ANTI-DRIFT WORKHORSE on a normal night is the EVE's own consult
-    (~5-min cadence against the measured reference load — the drift fixture
-    19:01→20:59Z IS the eve window); _night_resolve covers the pre-blackout
-    tail + the recovery moments around it.
+    (~5-min cadence against the measured reference load); _night_resolve
+    covers the pre-blackout tail + the recovery moments around it.
 
     While the link is UP, a measured reference load exists, the switch still
     DRAINS (grid OFF — a crossing only speaks while discharging) and EXACTLY
     ONE armed grid-ON timer exists (the same armed-state the eve reads):
     recompute t_fire = now + (avail − floor) ÷ (load × safety) from the fresh
-    §19 counter anchor (remaining_ah × V_avg-class, exactly how the eve builds
+    counter anchor (remaining_ah × V_avg-class, exactly how the eve builds
     it). A move BEYOND WRITE_DEADBAND_MIN rewrites the device timer through
-    the same apply_plan/ensure_on path the eve uses (the §27 armed stamp →
-    last_planned_fire/plan_ideal follow the write truthfully); within the
-    deadband → silent keep (apply_plan's own within-deadband note never fires
-    here because the step itself gates BEFORE the write — the probe cadence
-    must not dust the trail).
+    the same apply_plan/ensure_on path the eve uses (the write-confirmed
+    armed stamp → last_planned_fire/plan_ideal follow the write
+    truthfully); within the deadband → silent keep (apply_plan's own
+    within-deadband note never fires here because the step itself gates
+    BEFORE the write — the probe cadence must not dust the trail).
 
     BLACKOUT PRESERVATION: reach down → NOTHING happens — no read, no audit,
     no write: the armed timer IS the blackout insurance and is never touched.
-    This step is the only thing running in the NIGHT branch before it returns
-    (review F2); the universal emergency floor-watch belongs to the AWAKE
-    phases — tick()'s IN-guard sits below the NIGHT branch, which returns
-    before reaching it (pre-existing structure at 9a1cb4a, out of Phase-A
-    scope). No reference → no evaluation at all (the old model's armed time
-    stands). A post-sunrise crossing is deliberately NOT refused here: the
-    §31/§32 morning clearing owns obsolete post-sunrise programs (Phase B
-    may add the onset refusal alongside the eve's clamp)."""
+    This step is the only thing running in the NIGHT branch before it returns;
+    the universal emergency floor-watch belongs to the AWAKE phases —
+    tick()'s IN-guard sits below the NIGHT branch, which returns before
+    reaching it. No reference → no evaluation at all (the old model's armed
+    time stands). A post-sunrise crossing is deliberately NOT refused here:
+    the morning clearing owns obsolete post-sunrise programs."""
     if not deps.reachable():
         return                                   # blackout: hands off the timer
     try:
         ref = deps.reference_load()
-    except Exception:                            # noqa: BLE001 — consult side rule
+    except Exception:                            # noqa: BLE001 — consult side
         return                                   # no method / consult crash → no step
     if not isinstance(ref, dict) or not ref.get("wh_h"):
         return                                   # no reference → no evaluation
@@ -684,16 +663,24 @@ def _night_resolve(cfg: Config, st: AppState, deps, now: datetime) -> None:
     avail = (reading.remaining_ah * _v_anchor
              if (reading is not None and reading.remaining_ah is not None
                  and _v_anchor is not None) else None)
+    # this step RE-PROGRAMS the armed timer — a crossing after midnight
+    # carries the FIRING day's tier, never the latched window max of the
+    # programming day.
+    # the floor comes from the CLUSTER day-view (_active_tier_day, never the
+    # window latch). BOTH candidate days unknown (cluster down / no doc) → NO
+    # write at all: the armed timer — the last cluster-verified program —
+    # stands untouched (blackout preservation); a raw-head rewrite here could
+    # silently disarm a band the eve programmed.
+    floor_today = _active_tier_day(cfg, deps, now.date())
+    floor_next = _active_tier_day(cfg, deps, (now + timedelta(days=1)).date())
+    if floor_today is None or floor_next is None:
+        return
     t_new = reference_crossing(
         now, avail, ref["wh_h"], cfg,
         full_ah=reading.full_ah if reading is not None else None,
         pack_v=reading.pack_v if reading is not None else None,
-        # DAY-OF-ACTION law 2026-11-14: this step RE-PROGRAMS the armed timer —
-        # a crossing after midnight carries the FIRING day's tier, never the
-        # latched window max of the programming day.
-        reserve_floor_pct=_active_tier_pct(cfg, st, deps, now.date()),
-        reserve_floor_pct_next=_active_tier_pct(
-            cfg, st, deps, (now + timedelta(days=1)).date()))
+        reserve_floor_pct=floor_today,
+        reserve_floor_pct_next=floor_next)
     if t_new is None:
         return                                   # unknown floor/avail → no guess
     new_sig = local_cron(t_new)
@@ -704,7 +691,7 @@ def _night_resolve(cfg: Config, st: AppState, deps, now: datetime) -> None:
             "fire_str": t_new.strftime("%H:%M")}
     ok = deps.apply_plan(TimerPlan(actions=[("failsafe_timer", data)]))
     if ok:
-        st.plan_ideal = t_new                     # §27: intent after the rewrite
+        st.plan_ideal = t_new                     # intent after the rewrite
         stamped = data.get("armed_local")         # … and the executor's device
         st.last_planned_fire = stamped if stamped is not None else t_new   # truth
     deps.audit("night_resolve", result="ok" if ok else "failed",
@@ -717,59 +704,55 @@ def _night_resolve(cfg: Config, st: AppState, deps, now: datetime) -> None:
 
 def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
          switch_state: str, timers: list) -> None:
-    st.eve_ran = True      # §27: today's eve consult rolled — gate for the
+    st.eve_ran = True      # today's eve consult rolled — gate for the
                            # closing final push (set here, at the consult's
                            # entry: any roll counts, even fully suppressed ones)
     samples = []
     try:
         samples = deps.bms_samples_2h()
-    except Exception as e:   # decision-path rule2026-10-23 (see tick reading):
-        deps.audit("eve_input_unavailable", result=str(e))   # R5: everything stays conservative
-    # v3 R3'': learned night profile — in v4 it feeds only the NIGHT EDGES (§3)
+    except Exception as e:   # same rule as tick's reading:
+        deps.audit("eve_input_unavailable", result=str(e))   # everything stays conservative
+    # learned night profile — it feeds only the NIGHT EDGES for the failsafe
+    # horizon
     try:
         profile = deps.night_profile()
-    except Exception as e:   # decision-path rule2026-10-23: conservative + visible
+    except Exception as e:   # conservative + visible
         deps.audit("night_profile_unavailable", result=str(e))
         profile = None
-    # v4 §3/§4: the CLEAN-median night need. Fetch failure nets to buckets=[] →
-    # need=None → conservative hold/bring-on (R8' — no guess without evidence).
+    # the CLEAN-median night need. Fetch failure nets to buckets=[] →
+    # need=None → conservative hold/bring-on (no guess without evidence).
     try:
         buckets = deps.night_buckets()
-    except Exception as e:   # decision-path rule2026-10-23: ANY class → buckets=[]
+    except Exception as e:   # ANY failure class → buckets=[]
         deps.audit("night_buckets_unavailable", result=str(e))
         buckets = []
     need = night_need_wh(buckets)
     try:
-        deps.yield_learning()          # L1: forecast vs measured (learning only)
-    except Exception:                  # noqa: BLE001 — defense2026-10-23: a PURE
-        # side-channel (v7: never gates) may NEVER take the eve decision down
-        # with it — the 20:07 tick_error series killed the whole consult via
-        # a naive/aware data-shape bug; the decision path must survive its
-        # instrumentation.
+        deps.yield_learning()          # forecast vs measured (learning only)
+    except Exception:                  # noqa: BLE001 — a PURE side-channel
+        # (never gates) may NEVER take the eve decision down with it — the
+        # decision path must survive its instrumentation.
         pass
     clean = sum(1 for b in buckets if b.get("status") == "CLEAN")
-    # --- owner PHYSICS ruling 2026-10-26 (§19, refined §20): mid-range capacity
-    # is AMP-HOUR based, NEVER the voltage snapshot. The BMS counter IS the
-    # trusted mid-range instrument (its own internal amp-integration — "the BMS
-    # will do just fine"; restart-proof: every run re-reads it, §20); the
-    # LiFePO4 plateau makes the cell voltage utterly blind mid-range — the
-    # incident (handoff §18): a 46 mV compressor sag (3.269 ↔ 3.315) swung the
-    # corrected-voltage SOC snapshot for HOURS of crossing chaos (10 writes in
-    # 45 min, zero convergence; 925 Wh voltage vs 1082 Wh counter live).
+    # --- mid-range capacity is AMP-HOUR based, NEVER the voltage snapshot. The
+    # BMS counter IS the trusted mid-range instrument (its own internal
+    # amp-integration; restart-proof: every run re-reads it); the LiFePO4
+    # plateau makes the cell voltage utterly blind mid-range — a small load sag
+    # swings the corrected-voltage SOC snapshot for HOURS of crossing chaos.
     # available = remaining_ah × V_avg — V_avg is the cheap Wh-conversion
-    # average only (owner §20); a failed average falls back to the LIVE pack_v
-    # (a sensor value — doctrine: sensor data beats textbook constants), both
-    # unknown → None → the conservative ratio branch (never a guessed number).
-    # The corrected-voltage SOC path is REMOVED from the eve's available; it
-    # keeps ONLY its designed home: the deep/knee band below (floor_wh in the
-    # planner + the emergency/ah_tief machinery in tick — byte-untouched) —
-    # KNEE VOLTAGE IS THE BELOW-ZERO GUARD for the deliberate below-counter
-    # discharge strategy (owner §20: the pack WILL be driven below the
-    # BMS-reported Ah to force its AH learning; the knee/deep band catches a
-    # counter that lies HIGH — the stable anchor bias is accepted per §19).
+    # average only; a failed average falls back to the LIVE pack_v (a sensor
+    # value — sensor data beats textbook constants), both unknown → None → the
+    # conservative ratio branch (never a guessed number). The corrected-voltage
+    # SOC path is REMOVED from the eve's available; it keeps ONLY its designed
+    # home: the deep/knee band below (floor_wh in the planner + the
+    # emergency/low-capacity machinery in tick) — KNEE VOLTAGE IS THE
+    # BELOW-ZERO GUARD for the deliberate below-counter discharge strategy (the
+    # pack IS driven below the BMS-reported Ah to force its Ah learning; the
+    # knee/deep band catches a counter that lies HIGH — the stable anchor bias
+    # is accepted).
     try:
         _v_avg = deps.pack_v_avg()
-    except Exception as e:   # decision-path rule2026-10-23: consult side crash
+    except Exception as e:   # consult side crash
         deps.audit("eve_input_unavailable", result=str(e))   # → live-pack_v fallback
         _v_avg = None
     _v_used = _v_avg if _v_avg is not None else (
@@ -783,26 +766,23 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                         if (reading is not None and reading.remaining_ah is not None
                             and reading.pack_v is not None) else None)
     # voltage stays audited as the DEEP-BAND disclosure (min_cell/corrected/
-    # SoC-curve) — it feeds NO mid-range decision anymore (ruling above)
+    # SoC-curve) — it feeds NO mid-range decision anymore
     _v_corr = (corrected_min_cell_v(reading.min_cell_v, reading.charge_a, cfg)
                if reading is not None else None)
-    # owner engineering doctrine 2026-11-13: the BMS is the ONLY sensor and
-    # the ONLY truth — the textbook LiFePO4 voltage→SoC table left the
-    # source; the live BMS SOC is the deep-band disclosure value.
+    # the BMS is the ONLY sensor and the ONLY truth — no textbook LiFePO4
+    # voltage→SoC table; the live BMS SOC is the deep-band disclosure value.
     _soc_p = reading.soc if reading is not None else None
-    # concept end-to-end (owner 2026-10-22): the crossing horizon = the
-    # MEASURED solar-night length (last completed solar night), else the
-    # learned hour edges, else the documented default.
+    # the crossing horizon = the MEASURED solar-night length (last completed
+    # solar night), else the learned hour edges, else the documented default.
     night_len = DEFAULT_NIGHT_LEN_H
     _measured = False
-    horizon_len = None         # Phase B: the LENGTH clamp may use a measured
-                               # span of ANY length (owner B(i) — the 6–16 h
-                               # gate keeps only its DIVISOR role below; the
-                               # fallback median crossing still divides by
-                               # night_len — flagged in the wave report)
+    horizon_len = None         # the LENGTH clamp may use a measured span of
+                               # ANY length (the 6–16 h gate keeps only its
+                               # DIVISOR role below; the fallback median
+                               # crossing still divides by night_len)
     try:
         spans = deps.solar_night_windows()
-    except Exception:        # decision-path rule2026-10-23: spans={} → edges/default
+    except Exception:        # any failure: spans={} → edges/default
         spans = {}
     if spans:
         _s, _e = spans[max(spans)]          # latest morning-labeled span
@@ -818,11 +798,10 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
             and profile.array_offset_h is not None:
         edges = (profile.array_onset_h - profile.array_offset_h) % 24
         night_len = edges if edges > 0 else DEFAULT_NIGHT_LEN_H
-    # --- owner REFERENCE-LOAD model (Phase A, 2026-10-30): the measured house
-    # load of the newest qualifying calendar night (grid-OFF clip mean, Wh/h).
-    # Consult side rule2026-10-23: ANY failure nets to None → the OLD median
-    # method keeps the crossing (the RealDeps side audits every real
-    # evaluation as the event class reference_load — source clip |
+    # --- the REFERENCE-LOAD model: the measured house load of the newest
+    # qualifying calendar night (grid-OFF clip mean, Wh/h). ANY failure nets
+    # to None → the median method keeps the crossing (the RealDeps side audits
+    # every real evaluation as the event class reference_load — source clip |
     # median_fallback — so the fallback marker exists WITHOUT this call
     # needing to write it; old test fakes without the method net silently).
     try:
@@ -832,15 +811,15 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
     load_wh_h = _ref.get("wh_h") if isinstance(_ref, dict) else None
     if load_wh_h is not None and load_wh_h <= 0:
         load_wh_h = None               # a non-positive load proves nothing
-    # --- Phase B/C: the horizon SOURCE — measured (fresh only) | predicted
-    # (the forecast onset link) | profile | none. The prediction consult reads
-    # the outlook forecast_ok refreshed at the PREVIOUS consult (the reserve
-    # tier's own weather transport — no second path, no extra HTTP here) and
-    # is consulted every eve tick (RealDeps evaluates once per day+target).
-    # Target = TOMORROW: the eve only runs in
-    # the evening window, so the next morning is tomorrow. RealDeps audits
-    # each evaluation as solar_day_pred (labelled, never state); old fakes
-    # without the method net to None → labelled 'none' below.
+    # --- the horizon SOURCE — measured (fresh only) | predicted | profile |
+    # none. The prediction consult reads the outlook forecast_ok refreshed at
+    # the PREVIOUS consult (the reserve tier's own weather transport — no
+    # second path, no extra HTTP here) and is consulted every eve tick
+    # (RealDeps evaluates once per day+target). Target = TOMORROW: the eve
+    # only runs in the evening window, so the next morning is tomorrow.
+    # RealDeps audits each evaluation as solar_day_pred (labelled, never
+    # state); old fakes without the method net to None → labelled 'none'
+    # below.
     try:
         _pred = deps.solar_day_prediction(now.date() + timedelta(days=1))
     except Exception:                  # noqa: BLE001 — missing method / consult crash
@@ -851,8 +830,8 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
     _basis = (load_wh_h if load_wh_h is not None
               else (need / max(1.0, night_len) if need is not None else None))
     deps.audit("night_need", inputs={"need_wh": need, "clean": clean,
-                                     # owner physics ruling2026-10-26 (§19/§20):
-                                     # available = counter × V_avg (both disclosed)
+                                     # available = counter × V_avg (both
+                                     # disclosed)
                                      "available_wh": available_wh,
                                      "available_bms_wh": available_bms_wh,
                                      "remaining_ah": reading.remaining_ah
@@ -863,72 +842,78 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                                      if reading is not None else None,
                                      "min_cell_corr": _v_corr,
                                      "soc_pct_v": _soc_p,
-                                     # Phase A: the crossing basis (None = the
-                                     # median fallback path kept its own rate)
+                                     # the crossing basis (None = the median
+                                     # fallback path kept its own rate)
                                      "load_wh_h": load_wh_h,
                                      "crossing_rate_wh_h": (
                                          _basis * cfg.safety_factor
                                          if _basis is not None else None),
-                                     # Phase B/C: the horizon's SOURCE (the
-                                     # onset itself never renders as state —
-                                     # solar_day_pred carries the prediction)
+                                     # the horizon's SOURCE (the onset itself
+                                     # never renders as state — solar_day_pred
+                                     # carries the prediction)
                                      "onset_src": onset_src,
                                      "safety": cfg.safety_factor})
-    # T3 §9.1 sun gate: the eve release needs a good forecast too (conservative
-    # on any missing data) — one fetch+ship per consult, verdict into the ratio.
+    # the sun gate: the eve release needs a good forecast too (conservative
+    # on any missing data) — one fetch+ship per consult, verdict into the
+    # ratio.
     try:
         sun_ok, sun_reason = deps.forecast_ok()
-    except Exception as e:   # decision-path rule2026-10-23: a forecast crash
-        # closes the gate conservatively (v7: missing data = hold), never the
-        # whole consult.
+    except Exception as e:   # a forecast crash closes the gate conservatively
+        # (missing data = hold), never the whole consult.
         sun_ok, sun_reason = False, f"forecast crash: {type(e).__name__}: {e}"
         deps.audit("forecast_unavailable", result=str(e))
-    # owner ruling2026-10-25 (part 3): THE eve consult = the sole prediction
-    # point per v7 — compute the weather-conditional reserve tier from the
-    # rolling outlook (freshly fetched by forecast_ok above) and latch it for
-    # the coming day (NOT cleared at rollover; overwritten next eve / revision).
+    # THE eve consult = the sole prediction point — compute the
+    # weather-conditional reserve tier from the rolling outlook (freshly
+    # fetched by forecast_ok above) and latch it for the coming day (NOT
+    # cleared at rollover; overwritten next eve / revision).
     _update_reserve_tier(cfg, st, deps)
-    # v4 §3: the ONE evening ratio decision (pure) → dispatched actions. PUSHES stay
-    # transition-guarded and tell the APPLICATION truth (I1).
-    # owner ruling §31 (§32): the ABSOLUTE next solar edge — computed above
-    # WITH its source label (measured | predicted | profile | none, disclosed
-    # in night_need.onset_src); None → the length clamp alone (no guess).
-    # owner DAY-OF-ACTION law 2026-11-14: the plan's floor = the tier OF THE
-    # DAY ITS TIMER FIRES ON (today's tier for a pre-midnight crossing, the
-    # next day's for one after — planner.action_day_floor_pct probes), while
-    # the release gates below speak for TODAY (the eve's own day).
+    # the ONE evening ratio decision (pure) → dispatched actions. PUSHES stay
+    # transition-guarded and tell the APPLICATION truth.
+    # the ABSOLUTE next solar edge — computed above WITH its source label
+    # (measured | predicted | profile | none, disclosed in
+    # night_need.onset_src); None → the length clamp alone (no guess).
+    # the plan's floor = the tier OF THE DAY ITS TIMER FIRES ON (today's tier
+    # for a pre-midnight crossing, the next day's for one after —
+    # planner.action_day_floor_pct probes), while the release gates below
+    # speak for TODAY (the eve's own day).
     tier_today = _active_tier_pct(cfg, st, deps, now.date())
     tier_tomorrow = _active_tier_pct(cfg, st, deps,
                                      (now + timedelta(days=1)).date())
+    # the PROGRAMMED floor comes from the CLUSTER day-view (never the latch;
+    # unknown → None = plan_evening's raw-head behavior) — the release gates
+    # below keep tier_today (the latched enforcement view, unchanged).
+    plan_floor_today = _active_tier_day(cfg, deps, now.date())
+    plan_floor_tomorrow = _active_tier_day(
+        cfg, deps, (now + timedelta(days=1)).date())
     plan = plan_evening(now, available_wh, need, switch_state, night_len, cfg,
                         forecast_ok=sun_ok,
                         pack_v=reading.pack_v if reading is not None else None,
                         full_ah=reading.full_ah if reading is not None else None,
-                        # owner part3: honor the reserve band in the night target
-                        # (only when a tier is latched; None = old behavior)
-                        reserve_floor_pct=tier_today,
-                        reserve_floor_pct_next=tier_tomorrow,
+                        # honor the reserve band in the night target
+                        # (CLUSTER day-view; None = raw-head behavior)
+                        reserve_floor_pct=plan_floor_today,
+                        reserve_floor_pct_next=plan_floor_tomorrow,
                         next_onset=next_onset,
-                        # Phase A: the reference load replaces the median
-                        # basis in the crossing (None = old rate, audited)
+                        # the reference load replaces the median basis in the
+                        # crossing (None = old rate, audited)
                         load_wh_h=load_wh_h,
-                        # Phase B: the length clamp may run on ANY measured
-                        # span length (None → night_len exactly as before)
+                        # the length clamp may run on ANY measured span
+                        # length (None → night_len exactly as before)
                         horizon_hours=horizon_len)
-    # v5 (§13): the plan may carry MULTIPLE actions (spend + schedule) — the
-    # loop dispatches each; every act narrates itself (transition-guarded push).
+    # the plan may carry MULTIPLE actions (spend + schedule) — the loop
+    # dispatches each; every act narrates itself (transition-guarded push).
     for kind, data in (list(plan.actions) or [("none", {"reason": "empty plan"})]):
         if kind == "release_night":
-            # owner ruling2026-10-25 (part 3): the night spend is a discharge
-            # release too — gated by the SAME reserve-tier rule: below the tier
-            # → no act, no verdict, no push (the grid stays on; the floors below
-            # are untouched). The guarded tier_hold line usually already fired in
-            # the grid-off block this very tick → still exactly ONE line.
+            # the night spend is a discharge release too — gated by the SAME
+            # reserve-tier rule: below the tier → no act, no verdict, no push
+            # (the grid stays on; the floors below are untouched). The guarded
+            # tier_hold line usually already fired in the grid-off block this
+            # very tick → still exactly ONE line.
             if not _tier_release_ok(cfg, st, deps, reading, tier_today):
                 verdict, ok = None, True        # hold: the transition guard stays quiet
                 continue
             verdict = EveVerdict.NIGHT_RELEASE
-            # T1 mandated order: collision first — abort the grid-off sequence on False
+            # collision-first order: abort the grid-off sequence on False
             ok = False
             if deps.act("disable_on_timers"):
                 ok = deps.act("switch_off", require_verify=True,
@@ -937,7 +922,7 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                            result="ok" if ok else "failed",
                            inputs={"available_wh": available_wh, "need_wh": need,
                                    "safety": cfg.safety_factor,
-                                   # §13: the release = spend the stored solar
+                                   # the release = spend the stored solar
                                    "radiation_sum_j": deps.last_radiation_j,
                                    "weather_min_j": cfg.weather_min_j,
                                    "forecast_ok": sun_ok})
@@ -945,25 +930,24 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                     st.morning_done = True
                     st.rescue_timer_set = False  # ON timers were just disabled
                     st.last_planned_fire = None  # the timer action (if any) re-sets it
-                    st.plan_ideal = None         # §27: same "re-set below" scope
+                    st.plan_ideal = None         # same "re-set below" scope
                     st.last_observed_switch = "off"   # override recognition baseline
         elif kind == "bring_on_now":
-            # Anti-oscillation guard (fix-round B2) — anti-oscillation, spec §8
-            # no-oscillation criterion; §9.1 stays owner-open: never fight the R2'
-            # grid-off release. Suppressed when the grid-off partner rule would immediately
-            # revert this ON — the v7 DRAIN rule fires this very tick (battery above
-            # the voltage floor (corrected > TRUE_FLOOR_V), or the grid-off released today
-            # (morning_done since rollover).
-            # Suppressed = audit only: no act, no verdict change, NO push (zero
-            # alternation); the night_need audit above still carries full fidelity.
+            # Anti-oscillation guard: never fight the grid-off release.
+            # Suppressed when the grid-off partner rule would immediately
+            # revert this ON — the DRAIN rule fires this very tick (battery
+            # above the voltage floor (corrected > TRUE_FLOOR_V), or the
+            # grid-off released today (morning_done since rollover).
+            # Suppressed = audit only: no act, no verdict change, NO push
+            # (zero alternation); the night_need audit above still carries
+            # full fidelity.
             grid_off_fight = (reading is not None and not voltage_floor_hit(
                 reading.min_cell_v, reading.charge_a, cfg)) or st.morning_done
-            # owner bug 2026-11-10 (20:07 incident): the fight must be REAL —
-            # the drain rule can only revert this ON THIS tick when its release
-            # path is open: actor contact AND the tier release gate (soc >=
-            # tier + hyst). Below a held tier — or without contact — nothing
-            # would revert; vetoing here turned the tier's own drain-stop
-            # intent into NO ACTION (SOC 25 % vs tier 30 %, no timer armed).
+            # the fight must be REAL — the drain rule can only revert this ON
+            # THIS tick when its release path is open: actor contact AND the
+            # tier release gate (soc >= tier + hyst). Below a held tier — or
+            # without contact — nothing would revert; vetoing here turned the
+            # tier's own drain-stop intent into NO ACTION.
             if grid_off_fight and not (
                     deps.reachable()
                     and _tier_release_ok(cfg, st, deps, reading, tier_today)):
@@ -972,18 +956,19 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                 deps.audit("eve_bring_on_suppressed", inputs={
                     "reason": GRID_OFF_SUPPRESS_REASON,
                     "soc": reading.soc if reading is not None else None,
-                    # §13 v7: the rule in force (the drain rule would revert this ON)
+                    # the rule in force (the drain rule would revert this ON)
                     "remaining_ah": reading.remaining_ah if reading is not None else None,
                     "floor_v": cfg.true_floor_v,
                     "morning_done": st.morning_done})
                 verdict, ok = None, True          # None → no transition → no push;
             else:                                 # the FINAL block below still runs
                 verdict = EveVerdict.GRID_HOLD
-                # §12.2 "on every intervention": best-effort timer clear BEFORE the ON —
-                # same deliberate difference to the collision-first switch_off paths:
-                # this rescue-ON ("stays on") must never be blocked by a failing
-                # clear; switch_on runs either way. No extra audit here: RealDeps.act
-                # already journals the clear result (act/act_failed, result ok/failed).
+                # best-effort timer clear BEFORE the ON — same deliberate
+                # difference to the collision-first switch_off paths: this
+                # rescue-ON ("stays on") must never be blocked by a failing
+                # clear; switch_on runs either way. No extra audit here:
+                # RealDeps.act already journals the clear result
+                # (act/act_failed, result ok/failed).
                 deps.act("disable_on_timers")
                 ok = deps.act("switch_on", require_verify=True,
                               reason=hold_reason(available_wh, need, cfg,
@@ -992,12 +977,12 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                     st.last_observed_switch = "on"   # override recognition baseline
                 elif not st.rescue_timer_set and not any(
                         is_rescue_timer(t) for t in timers):
-                    # owner bug 2026-11-10 (20:07 incident): an eve ON decision
-                    # that did not deliver must NEVER leave the night bare —
-                    # arm the DEVICE-side timer (§31 blackout insurance: fires
-                    # from the device clock without WiFi) + the §27 truth
-                    # fields; the failed direct attempt still signals itself
-                    # (act()'s NO CHANNEL / verify audit + the push below).
+                    # an eve ON decision that did not deliver must NEVER
+                    # leave the night bare — arm the DEVICE-side timer
+                    # (blackout insurance: fires from the device clock
+                    # without WiFi) + the intent/armed truth fields; the
+                    # failed direct attempt still signals itself (act()'s
+                    # NO CHANNEL / verify audit + the push below).
                     _at = now + timedelta(minutes=2)
                     _data = {"at_local": _at,
                              "timer": build_on_timer(_at, cfg.tz),
@@ -1010,17 +995,16 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                                        "reason": "direct switch_on did not deliver"})
                     if _ins:
                         st.rescue_timer_set = True
-                        st.plan_ideal = _data["at_local"]        # §27 intent
+                        st.plan_ideal = _data["at_local"]        # intent
                         st.last_planned_fire = (_data.get("armed_local")
                                                 or _data["at_local"])  # device stamp wins
         elif kind == "failsafe_timer":
             verdict = EveVerdict.RESCUE_TIMER
-            # owner ruling 2026-11-13 ("a SINGLE grid on prediction"): an
-            # armed program on the device IS the night's prediction from the
-            # load-profile snapshot — keep it, never rewrite it every tick
-            # (the re-arm followed the rebound-contaminated counter, wandered
-            # 21:10 → 21:24 and finally landed in the past). The standing
-            # program is the device truth and carries the stamps.
+            # an armed program on the device IS the night's prediction from
+            # the load-profile snapshot — keep it, never rewrite it every tick
+            # (a re-arm following the rebound-contaminated counter drifts and
+            # can land in the past). The standing program is the device truth
+            # and carries the stamps.
             standing = [t for t in timers
                         if (t.get("do") or {}).get("switch") == "on"
                         and t.get("enabled", 1) != 0]
@@ -1037,21 +1021,22 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                                        timespec="minutes")})
             else:
                 ok = deps.apply_plan(plan)           # the existing ensure-on programming path
-                st.rescue_timer_set = ok             # F3: device truth from the executor's read-back
-                # §27: TWO truths ride along — the PLANNER's crossing (intent,
-                # re-projected every tick = the ideal) and the WRITE-CONFIRMED armed
-                # (device truth, stamped by the executor as data["armed_local"]:
-                # verified write / identical program / within-deadband keep — the
-                # deadband path returns True WITHOUT writing, so `ok` alone would
-                # label the ideal as armed under tonight's §19 physics).
+                st.rescue_timer_set = ok             # device truth from the executor's read-back
+                # TWO truths ride along — the PLANNER's crossing (intent,
+                # re-projected every tick = the ideal) and the
+                # WRITE-CONFIRMED armed (device truth, stamped by the executor
+                # as data["armed_local"]: verified write / identical program /
+                # within-deadband keep — the deadband path returns True
+                # WITHOUT writing, so `ok` alone would label the ideal as
+                # armed under the write-deadband semantics).
                 st.plan_ideal = data["at_local"]
                 armed = data.get("armed_local")
                 if armed is not None:
                     st.last_planned_fire = armed      # device-grounded armed only
                 elif ok and "armed_local" not in data:
-                    # executors without the stamp contract (test fakes, DRY_RUN's
-                    # suppressed write): ok meant "applied" there → keep the v3
-                    # semantics (the handed-off crossing).
+                    # executors without the stamp contract (test fakes,
+                    # DRY_RUN's suppressed write): ok meant "applied" there →
+                    # keep the handed-off-crossing semantics.
                     st.last_planned_fire = data["at_local"]
                 # not ok / stamped-unknown → the last CONFIRMED armed survives —
                 # never overwrite device truth with an intention.
@@ -1061,23 +1046,22 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
         else:                                     # "none": the battery carries the night
             verdict, ok = EveVerdict.SAFE_CLEAR, True
             if st.rescue_timer_set or any(is_rescue_timer(t) for t in timers):
-                # deep-drain ruling2026-10-22: a verdict FLIP rescue_timer →
-                # carries must DISARM the previously armed return — else the
-                # stale timer still fires at the old crossing and cuts the
-                # night short (exactly what the ruling removes). Device truth
+                # a verdict FLIP rescue_timer → carries must DISARM the
+                # previously armed return — else the stale timer still fires
+                # at the old crossing and cuts the night short. Device truth
                 # from the fresh read covers a restart that lost the
                 # in-memory flag. Best-effort: the clear journals itself; on
                 # failure the flag stays True and the next eve tick retries.
                 if deps.act("disable_on_timers"):
                     st.rescue_timer_set = False
                     st.last_planned_fire = None
-                    st.plan_ideal = None     # §27: carries = no timer wanted
+                    st.plan_ideal = None     # carries = no timer wanted
 
-        if verdict is not None and st.evening_verdict != verdict.value:   # F3: transition guard drives PUSHES only
+        if verdict is not None and st.evening_verdict != verdict.value:   # transition guard drives PUSHES only
             st.evening_verdict = verdict.value
             if verdict is EveVerdict.SAFE_CLEAR:
                 st.rescue_fallback = None
-            if not ok:                               # I1: honest failure signal, action named
+            if not ok:                               # honest failure signal, action named
                 deps.push("NO CHANNEL", msg(cfg.msg_lang, "no_channel", action=kind))
             elif verdict is EveVerdict.NIGHT_RELEASE:   # the spend act (numbers ride along)
                 deps.push("NIGHT PLAN", msg(cfg.msg_lang, "night_release",
@@ -1087,7 +1071,7 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                 deps.push("NIGHT PLAN", msg(cfg.msg_lang, "safe_clear",
                                            min_v=(reading.min_cell_v if reading else None) or 0.0,
                                            slope=_slope(samples)))
-            elif verdict is EveVerdict.RESCUE_TIMER:  # LOCK: rescue_set text kept, time = fire
+            elif verdict is EveVerdict.RESCUE_TIMER:  # rescue_set text kept, time = fire
                 deps.push("NIGHT PLAN", msg(cfg.msg_lang, "rescue_set",
                                            time=data["fire_str"]))
             else:                                    # GRID_HOLD: reason from payload/hold_reason
@@ -1096,10 +1080,10 @@ def _eve(cfg: Config, st: AppState, deps, now: datetime, reading,
                                          or hold_reason(available_wh, need, cfg,
                                                         sun_ok, sun_reason)))
 
-    # §27: the FINAL push no longer fires here (first final-phase tick = the
-    # incident). It fires at the eve's CLOSING in tick()'s phase-NIGHT branch —
-    # after the last possible write. _final_plan retired with it: the armed/
-    # ideal composition lives in the night_plan[_armed[_ideal]] templates.
+    # the FINAL push does not fire here: it fires at the eve's CLOSING in
+    # tick()'s phase-NIGHT branch — after the last possible write. The
+    # armed/ideal composition lives in the night_plan[_armed[_ideal]]
+    # templates.
 
 
 def _slope(samples) -> float:
@@ -1110,26 +1094,22 @@ def _slope(samples) -> float:
     return (v1 - v0) / h if h > 0 else 0.0
 
 
-# --- owner ruling 2026-10-25 (part 3): weather-conditional RESERVE TIERS -------
+# --- weather-conditional RESERVE TIERS ------------------------------------------
 def restore_reserve_tier(st: AppState, deps) -> None:
-    """Restart-window safety (owner incident 2026-10-25 09:37:39 UTC): a
-    deploy restarted the addon — AppState is in-memory, st.reserve_tier_pct
-    back to 0, and the FIRST tick afterwards evaluated the release gate with
-    tier=0 (open) and granted a day-drain release (09:37:39 act
-    disable_on_timers + switch_off, grid_off inputs {soc: 12, ground:
-    "drain"}), while the owner-ordered reserve tier was 30 %; six
-    seconds later the forecast refresh re-latched the tier (09:37:45
-    reserve_tier {tier_pct: 30}). The decision IS durable in the
-    events index (event reserve_tier) — only the latch forgets it on every
-    restart. This seed reloads it BEFORE the first decision tick.
+    """Restart-window safety: AppState is in-memory, so a restart resets
+    st.reserve_tier_pct to 0 while the durable decision still stands — the
+    FIRST tick after a restart would otherwise evaluate the release gate with
+    tier=0 (open) and grant a day-drain release the standing tier forbids.
+    The decision IS durable in the events index (event reserve_tier); this
+    seed reloads it BEFORE the first decision tick.
 
     Consult side like every other: ANY Exception → keep 0, no crash (the
     restart must never fail on the seed). Only a non-negative INT saturates
-    the latch. No audit for a seed — no NEW decision is
-    made, only the durable one is reloaded. ACCEPTED: st.reserve_tier_sig
-    stays None, so the next legitimate recomputation CAN write ONE duplicate
-    reserve_tier event with the same decision — one honest
-    line per restart, never spam."""
+    the latch. No audit for a seed — no NEW decision is made, only the
+    durable one is reloaded. ACCEPTED: st.reserve_tier_sig stays None, so
+    the next legitimate recomputation CAN write ONE duplicate reserve_tier
+    event with the same decision — one honest line per restart, never
+    spam."""
     try:
         inputs = deps.latest_reserve_tier()
     except Exception:                        # noqa: BLE001 — keep 0, no crash
@@ -1140,17 +1120,17 @@ def restore_reserve_tier(st: AppState, deps) -> None:
 
 
 def restore_phase_flags(st: AppState, deps, now: datetime, cfg) -> None:
-    """Restart seed for the day-scoped phase flags (owner incident 2026-10-25):
-    a mid-day restart left morning_done=False although today's morning OFF had
-    already happened → phase stuck at MORNING → no eve roll → the frontend
-    never opened tonight's night row. Evidence rules derived FROM THE SETTERS
-    (main.py ~323 and ~465): morning_done := a successful grid_off TODAY
-    (both setters audit exactly that after ok). night_over := a night_over
-    event in the last 24 h (NIGHT probe audit; verified via grep: night_over
-    is NEVER cleared — the F2 rollover resets morning_done only — so the 24 h
-    scope covers every window the flag can matter in). Crash-netted like
-    every consult side: a query failure leaves the defaults (False) and the
-    next restart retries — a failed seed must never kill the boot."""
+    """Restart seed for the day-scoped phase flags: a mid-day restart left
+    morning_done=False although today's morning OFF had already happened →
+    phase stuck at MORNING → no eve roll → the frontend never opened tonight's
+    night row. Evidence rules derived FROM THE SETTERS: morning_done := a
+    successful grid_off TODAY (both setters audit exactly that after ok).
+    night_over := a night_over event in the last 24 h (NIGHT probe audit;
+    night_over is NEVER cleared — the rollover resets morning_done only — so
+    the 24 h scope covers every window the flag can matter in).
+    Crash-netted like every consult side: a query failure leaves the
+    defaults (False) and the next restart retries — a failed seed must never
+    kill the boot."""
     try:
         day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
         evidence = deps.phase_evidence(day_start.isoformat())
@@ -1169,16 +1149,16 @@ def _update_reserve_tier(cfg: Config, st: AppState, deps) -> None:
     """Compute the weather-conditional RESERVE TIER from the rolling outlook
     and overwrite the latch (eve consult + every forecast/outlook revision).
 
-    Call sites: `_eve` (the sole prediction point per v7 — the eve re-reads the
-    outlook its own forecast_ok just fetched) and `RealDeps.forecast_refresh(st)`
-    (the midday revision path — wherever the forecast/outlook is refreshed).
-    Tier-1 reads the outlook's own radiation vs the weather card's solar
-    reference (WEATHER_MIN_J) — trigger and card share ONE number (owner
-    correction 2026-10-25). Pure
-    consult side: any crash → conservative no-op (the latch keeps yesterday's
-    decision; the emergency floors carry safety). Always recomputes; the
-    `reserve_tier` audit fires only when the DECISION (tier + triggers +
-    window dates) actually changes — one WHY line per change, never per tick.
+    Call sites: `_eve` (the sole prediction point — the eve re-reads the
+    outlook its own forecast_ok just fetched) and
+    `RealDeps.forecast_refresh(st)` (the midday revision path — wherever the
+    forecast/outlook is refreshed). Tier-1 reads the outlook's own radiation
+    vs the weather card's solar reference (WEATHER_MIN_J) — trigger and card
+    share ONE number. Pure consult side: any crash → conservative no-op (the
+    latch keeps the last decision; the emergency floors carry safety). Always
+    recomputes; the `reserve_tier` audit fires only when the DECISION (tier +
+    triggers + window dates) actually changes — one WHY line per change,
+    never per tick.
     """
     try:
         outlook, outlook_ts = deps.outlook_days()
@@ -1186,14 +1166,14 @@ def _update_reserve_tier(cfg: Config, st: AppState, deps) -> None:
         return
     try:
         need = night_need_wh(deps.night_buckets())
-    except Exception:   # noqa: BLE001 — decision-path rule2026-10-23: unknown need
+    except Exception:   # noqa: BLE001 — unknown need
         need = None
     try:
-        yl = deps.yield_learning()          # L1 cached per day (RealDeps) — side-channel
+        yl = deps.yield_learning()          # cached per day (RealDeps) — side-channel
         factor = yl.get("factor") if isinstance(yl, dict) else None
     except Exception:   # noqa: BLE001 — unknown factor → tier-1 simply cannot fire
         factor = None
-    tier, triggers = reserve_tier(outlook, cfg)   # tier-1 = solar-reference comparison (owner 10-25)
+    tier, triggers = reserve_tier(outlook, cfg)   # tier-1 = solar-reference comparison
     sig = (tier, tuple(triggers),
            tuple(d.get("date") for d in outlook if isinstance(d, dict))
            if isinstance(outlook, list) else ())
@@ -1201,9 +1181,9 @@ def _update_reserve_tier(cfg: Config, st: AppState, deps) -> None:
     if sig == st.reserve_tier_sig:
         return                              # unchanged decision → no repeated line
     st.reserve_tier_sig = sig
-    # owner2026-10-25 "no value inventions in the front end": these are the
-    # BACKEND-configured numbers the monitor renders — the display never keeps
-    # its own copy of any of them (reference, hysteresis, thresholds).
+    # no value inventions in the front end: these are the BACKEND-configured
+    # numbers the monitor renders — the display never keeps its own copy of
+    # any of them (reference, hysteresis, thresholds).
     deps.audit("reserve_tier", inputs={"tier_pct": tier,
                                        "triggers": list(triggers),
                                        "lookahead_days": cfg.tier_lookahead_days,
@@ -1215,12 +1195,11 @@ def _update_reserve_tier(cfg: Config, st: AppState, deps) -> None:
 
 
 def _active_tier_pct(cfg: Config, st: AppState, deps, on_date) -> int:
-    """Owner DAY-OF-ACTION law 2026-11-14: every ENFORCEMENT read of the
-    reserve tier (drain-stop, release gates, plan floors) evaluates the tier
-    OF THE DAY THE ACTOR ACTS ON — the bad-weather forecast day itself, never
-    the day after ("the UPS … only for the day … not for the day after";
-    "a programmed timer … should consider the day the actor acts and not the
-    day the programming happens"). The rolling outlook is filtered per date
+    """Every ENFORCEMENT read of the reserve tier (drain-stop, release gates,
+    plan floors) evaluates the tier OF THE DAY THE ACTOR ACTS ON — the
+    bad-weather forecast day itself, never the day after (a programmed timer
+    must consider the day the actor acts, not the day the programming
+    happens). The rolling outlook is filtered per date
     (verdict.active_tier_on); outlook unknown or not covering `on_date` →
     honest fallback to the latched window decision (missing data must never
     silently disarm a hold). The latch itself (reserve_tier_pct / its audit)
@@ -1233,25 +1212,40 @@ def _active_tier_pct(cfg: Config, st: AppState, deps, on_date) -> int:
     return st.reserve_tier_pct if res is None else res[0]
 
 
+def _active_tier_day(cfg: Config, deps, on_date) -> int | None:
+    """The per-day tier FOR TIMER PROGRAMMING — straight from the cluster
+    outlook copy (deps.outlook_days reads OpenSearch), NEVER the window
+    latch: unknown (cluster down / date uncovered) stays honest None so the
+    crossing computes no floor and the armed timer is left untouched. An
+    invented floor may never reprogram a crossing (a latch fallback once
+    armed a wrong-band crossing instead of the eve's programmed one)."""
+    try:
+        outlook, _ts = deps.outlook_days()
+    except Exception:                                   # noqa: BLE001 — no source
+        return None
+    res = active_tier_on(outlook, cfg, on_date)
+    return None if res is None else res[0]
+
+
 def _tier_release_ok(cfg: Config, st: AppState, deps, reading, tier: int) -> bool:
-    """Owner ruling 2026-10-25 (part 3): the RESERVE-TIER RELEASE GATE — while
-    a tier is active, a release that would let the battery DISCHARGE may only
-    run at/above tier + tier_release_hyst_pct (BMS SOC instrument — the carve-out lives in
-    verdict.reserve_tier: display-only stays binding for the DEEP/emergency
-    decisions, BMS SOC is the correct instrument for the mid-band tier gates).
-    Below the tier → the grid STAYS ON: a soft hold, NO act; the deep floors,
-    the emergency act and voltage_floor_hit beneath are untouched (additive
-    layer) and the GRID-ON emergency switch is never gated by the tier.
+    """The RESERVE-TIER RELEASE GATE — while a tier is active, a release
+    that would let the battery DISCHARGE may only run at/above tier +
+    tier_release_hyst_pct (BMS SOC instrument — display-only stays binding
+    for the DEEP/emergency decisions, BMS SOC is the correct instrument for
+    the mid-band tier gates). Below the tier → the grid STAYS ON: a soft
+    hold, NO act; the deep floors, the emergency act and voltage_floor_hit
+    beneath are untouched (additive layer) and the GRID-ON emergency switch
+    is never gated by the tier.
 
-    `tier` (DAY-OF-ACTION law 2026-11-14) is the caller's per-day evaluation
-    (_active_tier_pct for the day this gate acts on) — the gate never reads
-    the window latch itself.
+    `tier` is the caller's per-day evaluation (_active_tier_pct for the day
+    this gate acts on) — the gate never reads the window latch itself.
 
-    UNKNOWN reading/soc while a tier is active → the gate cannot show positive
-    evidence → the release stays blocked (no discharge act without data); the
-    mirrored drain-stop rule keeps the EXISTING drain on unknown SOC (no new
-    act there either). Guarded audit: ONE tier_hold line per engage or tier
-    change, never one per tick; the release act narrates the hold's end."""
+    UNKNOWN reading/soc while a tier is active → the gate cannot show
+    positive evidence → the release stays blocked (no discharge act without
+    data); the mirrored drain-stop rule keeps the EXISTING drain on unknown
+    SOC (no new act there either). Guarded audit: ONE tier_hold line per
+    engage or tier change, never one per tick; the release act narrates the
+    hold's end."""
     soc = reading.soc if reading is not None else None
     if tier <= 0:
         st.tier_hold_pct = 0                 # no tier → nothing left to hold
@@ -1278,11 +1272,11 @@ class RealDeps:
         self.lan = LanClient(cfg.sw_ip, cfg.sw_deviceid, cfg.sw_devicekey)
         self.bms = BmsSource(cfg.os_url, cfg.bms_index, cfg.bms_cell_fields,
                              cfg.bms_current_path)
-        # L1: forecast docs live in the weather index — mirror the cfg prefix
+        # forecast docs live in the weather index — mirror the cfg prefix
         # (default composes to the frontend's GG_WEATHER "gridguard-weather-*")
         self.bms.weather_index = f"{cfg.weather_index_prefix}-*"
-        # L1 per-class yield (owner2026-10-25): the events index (the addon's
-        # OWN §10b labels) for the grid-ON share — same cfg-mirror doctrine
+        # per-class yield: the events index (the addon's own labels) for the
+        # grid-ON share — same cfg-mirror doctrine
         self.bms.events_index = f"{cfg.events_index}-*"
         self.weather = WeatherClient(cfg.weather_lat, cfg.weather_lon) \
             if cfg.weather_lat is not None else None
@@ -1293,40 +1287,62 @@ class RealDeps:
                                   events_index=cfg.events_index,
                                   events_index_enabled=cfg.events_index_enabled)
         self._tz = timezone.utc
-        self._profile_cache: tuple[date, NightProfile] | None = None   # v3: learn once/day
-        self._buckets_cache: tuple[date, list[dict]] | None = None     # v4: buckets once/day
+        self._profile_cache: tuple[date, NightProfile] | None = None   # learn once/day
+        self._buckets_cache: tuple[date, list[dict]] | None = None     # buckets once/day
         self._solar_cache: tuple[date, dict, dict] | None = None   # day_bounds + night spans, once/day
-        self._yield_cache: tuple[date, dict | None] | None = None  # L1: learn once/day (also caches honest None)
-        self._weather_refresh_t: float | None = None  # owner2026-10-23: forecast revision throttle
-        self._last_ok_act: tuple | None = None  # owner2026-10-23: identical ok-confirmation only once
-        # owner physics ruling2026-10-26 (§19): one "within deadband" audit per
-        # (kind, armed signature) — the trail notes the skip once, never per tick
+        self._yield_cache: tuple[date, dict | None] | None = None  # learn once/day (also caches honest None)
+        self._weather_refresh_t: float | None = None  # forecast revision throttle
+        self._last_ok_act: tuple | None = None  # identical ok-confirmation only once
+        # one "within deadband" audit per (kind, armed signature) — the trail
+        # notes the skip once, never per tick
         self._deadband_sig: tuple | None = None
-        self.last_radiation_j: float | None = None   # T3 §9.1: audit mirror of the last fetch
-        # owner ruling2026-10-25 (part 3): the reserve tier reads the outlook
-        # cached by the TWO places that already fetch it (forecast_ok at the eve,
-        # forecast_refresh on the revision path) — no extra HTTP for the decision
-        self._outlook: list[dict] | None = None
-        self._outlook_ts: str | None = None
-        # owner REFERENCE-LOAD model (Phase A): the reference only changes
-        # when a calendar night completes → ONE evaluation (and ONE
-        # reference_load audit) per local day, like night_buckets/profile
+        self.last_radiation_j: float | None = None   # audit mirror of the last fetch
+        # ══ CACHE DOCTRINE ════════════════════════════════════════════════════
+        # A cache may exist ONLY where it makes sense:
+        #  (i) throttling an EXTERNAL, slow, rate-limited API on the FETCH side
+        #      (_weather_refresh_t — the open-meteo call),
+        #  (ii) write/audit dedup (_last_ok_act, _deadband_sig, the *sig guards)
+        #      — they guard ACTIONS and compare against FRESH device reads,
+        #  (iii) daily-LEARNED derived state whose inputs cannot change within
+        #      the local day (_profile/_buckets/_solar/_yield/_ref — each
+        #      date-keyed with its "only changes at sunrise" reason stated).
+        # READS of a truth source (OpenSearch, BMS index, the device) are
+        # ALWAYS DIRECT — the cluster answers in <3 ms, so no read-side cache
+        # may ever stand between a decision and its truth source. And NEVER a
+        # silent invented fallback value: unknown → honest None → conservative
+        # no-op / hands-off. (An in-memory weather hand-off once served a
+        # restart-empty value and reprogrammed a crossing from a stale latch —
+        # hence the cluster copy is the only read source; outlook_days() reads
+        # it.)
+        # THE FULL MODEL: the CLUSTER is the truth layer and ALL consumers
+        # read against it. WRITE side — run() calls forecast_refresh(st) after
+        # EVERY tick in ALL phases (self-throttled FORECAST_REFRESH_MIN = 30
+        # min default; the host's internet is independent of the actor-WiFi
+        # blackout) → ship_forecast + ship_outlook; the outlook doc id
+        # md5(local-day|outlook) is STABLE per day, so each cycle OVERWRITES
+        # the forecast day's data with the fresh fetch (rolling latest). READ
+        # side — every consumer reads load_outlook (the newest doc by ts); no
+        # consumer may keep its own copy of weather truth.
+        # the reference only changes when a calendar night completes → ONE
+        # evaluation (and ONE reference_load audit) per local day, like
+        # night_buckets/profile
         self._ref_cache: tuple[date, dict | None] | None = None
-        # Phase C: the solar-day prediction only changes when the outlook,
-        # the measured edges or the yield facts do → ONE evaluation (and ONE
+        # the solar-day prediction only changes when the outlook, the
+        # measured edges or the yield facts do → ONE evaluation (and ONE
         # solar_day_pred audit) per (local day, target)
         self._solar_pred_cache: tuple | None = None
 
     # --- deps API ---
     def bms_latest(self): return self.bms.latest()
     def bms_samples_2h(self):
-        # T6: v1 projection-window config removed — samples now only feed the safe_clear slope
+        # samples only feed the safe_clear slope
         return self.bms.samples_minutes(120)
 
     def night_profile(self) -> NightProfile:
-        """v3 R3'': learned night-load/array-run profile — recomputed at most once per
-        local day over the rolling HIST_DAYS window (spec R3''); in v4 it feeds the
-        NIGHT EDGES for the failsafe horizon. Fetch errors propagate → _eve nets them (R8')."""
+        """Learned night-load/array-run profile — recomputed at most once per
+        local day over the rolling HIST_DAYS window; it feeds the NIGHT EDGES
+        for the failsafe horizon. Fetch errors propagate → _eve nets them
+        (conservative hold)."""
         today = datetime.now(self.cfg.tz).date()
         if self._profile_cache is not None and self._profile_cache[0] == today:
             return self._profile_cache[1]
@@ -1344,8 +1360,8 @@ class RealDeps:
 
     def solar_windows(self) -> tuple[dict, dict]:
         """(day_bounds, night_spans) — the ONE solar-day rule queried in the
-        cluster (periods = executable spec), cached per local day like the
-        profile/buckets. Sunless dates simply get no pair; failures →
+        cluster (periods.py holds the executable rule), cached per local day
+        like the profile/buckets. Sunless dates simply get no pair; failures →
         empty maps, NOT cached (next call retries the cluster — conservative:
         consumers fall back to documented defaults, never guess a boundary)."""
         today = datetime.now(self.cfg.tz).date()
@@ -1357,12 +1373,11 @@ class RealDeps:
                 return self.weather.sun_times(d) if self.weather is not None else None
             except Exception:
                 return None
-        # owner rule2026-10-23: today's calendar sunset rides the boundary
-        # round (no extra HTTP) — a solar day's length is final only AFTER it.
-        # PRODUCTION CONTRACT (tick_error 2026-10-23 20:07+): sun_times returns
-        # NAIVE local datetimes (fromisoformat of offset-less open-meteo
-        # strings) while bounds/now are tz-aware — normalize here (naive =
-        # local wall time, the F5 doctrine) before anything compares it.
+        # today's calendar sunset rides the boundary round (no extra HTTP) —
+        # a solar day's length is final only AFTER it. CONTRACT: sun_times
+        # returns NAIVE local datetimes (fromisoformat of offset-less
+        # open-meteo strings) while bounds/now are tz-aware — normalize here
+        # (naive = local wall time) before anything compares it.
         _t_sun = _sun(today)
         today_sunset = None
         if _t_sun and _t_sun[1] is not None:
@@ -1376,10 +1391,10 @@ class RealDeps:
                                                self.cfg.flow_a, _sun)
             sp = night_windows(bd)
         except (BmsError, RuntimeError):
-            # F5-2: failures are NOT cached (night_profile/night_buckets
-            # doctrine) — return empty WITHOUT writing _solar_cache, so the
-            # next call retries the cluster instead of pinning the
-            # clock-fallback for the whole local day after one blip.
+            # failures are NOT cached (night_profile/night_buckets doctrine)
+            # — return empty WITHOUT writing _solar_cache, so the next call
+            # retries the cluster instead of pinning the clock-fallback for
+            # the whole local day after one blip.
             return {}, {}
         self._solar_cache = (today, bd, sp, today_sunset)
         return bd, sp
@@ -1390,26 +1405,25 @@ class RealDeps:
 
     def solar_today_sunset(self) -> datetime | None:
         """Calendar sunset of the local today as captured by the boundary
-        round (owner rule2026-10-23: a solar day's length is final only at/
-        after it)."""
+        round (a solar day's length is final only at/after it)."""
         self.solar_windows()               # ensures the daily cache
         return self._solar_cache[3] if self._solar_cache else None
 
     def forecast_refresh(self, st: AppState | None = None) -> None:
-        """Owner2026-10-23 (intake only): the forecast REVISION PATH must land
-        in the cluster THROUGH the day — a midday-changed open-meteo value is a
-        new data point for the forecast↔harvest mapping (L1) and must not wait
-        for the ~21:00 eve ship. Throttled to cfg.forecast_refresh_min;
-        ship_forecast's value-based md5 id makes an unchanged value an
-        idempotent rewrite and a changed value a NEW doc — the day's revision
-        chain accumulates by construction. Also refreshes the rolling storm
-        outlook. Best-effort: never raises, never blocks, no gate touched.
+        """The forecast REVISION PATH must land in the cluster THROUGH the
+        day — a midday-changed open-meteo value is a new data point for the
+        forecast↔harvest mapping and must not wait for the ~21:00 eve ship.
+        Throttled to cfg.forecast_refresh_min; ship_forecast's value-based
+        md5 id makes an unchanged value an idempotent rewrite and a changed
+        value a NEW doc — the day's revision chain accumulates by
+        construction. Also refreshes the rolling storm outlook. Best-effort:
+        never raises, never blocks, no gate touched.
 
-        Owner ruling2026-10-25 (part 3): when the caller passes the AppState
-        (run() does), the freshly shipped outlook also RE-EVALUATES the
-        reserve tier — the midday forecast revision path overwrites the latch
-        and audits reserve_tier again on every actual decision change (the
-        event name stays stable, the result may differ)."""
+        When the caller passes the AppState (run() does), the freshly shipped
+        outlook also RE-EVALUATES the reserve tier — the midday forecast
+        revision path overwrites the latch and audits reserve_tier again on
+        every actual decision change (the event name stays stable, the result
+        may differ)."""
         now_t = _time.monotonic()
         if (self._weather_refresh_t is not None
                 and now_t - self._weather_refresh_t
@@ -1423,58 +1437,51 @@ class RealDeps:
             pass
         try:
             days = self.weather.daily_outlook() if self.weather is not None else None
-            self._set_outlook(days)
-            ship_outlook(self.cfg, days)
+            ship_outlook(self.cfg, days)        # cluster copy = the read source
         except Exception:                      # noqa: BLE001
             pass
         if st is not None:
             try:
-                _update_reserve_tier(self.cfg, st, self)   # part3 revision re-evaluation
+                _update_reserve_tier(self.cfg, st, self)   # revision re-evaluation
             except Exception:                  # noqa: BLE001 — the revision path never dies
                 pass
 
-    def _set_outlook(self, days: list[dict] | None) -> None:
-        """Cache the freshly fetched rolling outlook + its fetch ts — the
-        reserve-tier decision (owner2026-10-25 part 3) reads this cache (NO
-        extra HTTP). days=None (fetch failure) is cached honestly → the tier
-        recomputes to 0 (empty outlook = no evidence = no reserve)."""
-        self._outlook = days
-        self._outlook_ts = (datetime.now(self.cfg.tz).isoformat(timespec="seconds")
-                            if days is not None else None)
-
     def outlook_days(self) -> tuple[list[dict] | None, str | None]:
-        """deps API for the reserve-tier computation: the last outlook fetched
-        (eve consult via forecast_ok / revision via forecast_refresh) + its ts."""
-        return self._outlook, self._outlook_ts
+        """deps API for the reserve-tier computation: reads the NEWEST
+        shipped outlook copy straight from the OpenSearch cluster
+        (ship_outlook = the write side, this = the read side) — NEVER the
+        in-memory fetch cache, so no result ever depends on process memory,
+        restart timing or deploy order (the timer calculation must ALWAYS
+        come from the OpenSearch cluster). (None, None) = honest unknown
+        (kill-switch / no doc / cluster down)."""
+        return load_outlook(self.cfg)
 
     def day_grid_on_pct(self, start: datetime, end: datetime) -> float | None:
-        """L1 per-class yield (owner ruling 2026-10-25): the grid-ON share of
-        [start, end] — the bounded events-index query lives in bms (same home
-        as forecast_doc_for/night_buckets); honest None on any failure →
-        class "unknown", never a fabricated 0."""
+        """The grid-ON share of [start, end] — the bounded events-index query
+        lives in bms (same home as forecast_doc_for/night_buckets); honest
+        None on any failure → class "unknown", never a fabricated 0."""
         return self.bms.day_grid_on_pct(start, end)
 
     def latest_reserve_tier(self) -> dict | None:
-        """Restart-window safety (owner incident 2026-10-25 09:37:39 UTC): the
-        newest reserve_tier decision's inputs — the bounded events-index query
-        lives in bms (same home as day_grid_on_pct); honest None on any
-        failure (run()'s seed then keeps the 0 latch)."""
+        """Restart-window safety: the newest reserve_tier decision's inputs —
+        the bounded events-index query lives in bms (same home as
+        day_grid_on_pct); honest None on any failure (run()'s seed then keeps
+        the 0 latch)."""
         return self.bms.latest_reserve_tier()
 
     def pack_v_avg(self) -> float | None:
-        """Owner physics ruling 2026-10-26 (§20): the eve's Wh-conversion
-        voltage is a cheap AVERAGE over the recent minutes (the instantaneous
-        pack voltage is a minor but real error term). One cluster-side avg
-        aggregation (Aggregations-Doctrin); honest None on any failure → _eve
-        falls back to the LIVE pack_v (a sensor value), never a guess."""
+        """The eve's Wh-conversion voltage is a cheap AVERAGE over the recent
+        minutes (the instantaneous pack voltage is a minor but real error
+        term). One cluster-side avg aggregation; honest None on any failure →
+        _eve falls back to the LIVE pack_v (a sensor value), never a guess."""
         return self.bms.pack_v_avg(PACK_V_AVG_MIN)
 
     def reference_load(self) -> dict | None:
-        """Owner REFERENCE-LOAD model (Phase A 2026-10-30): the newest
-        qualifying CALENDAR-night grid-OFF clip load (Wh/h + provenance) —
-        weather sunset/sunrise (the SAME WeatherClient path the solar-night
-        windows use), the addon's own ok-confirmed journal moments and the
-        BMS counter series, evaluated by gridguard.reference.
+        """The REFERENCE-LOAD model: the newest qualifying CALENDAR-night
+        grid-OFF clip load (Wh/h + provenance) — weather sunset/sunrise (the
+        SAME WeatherClient path the solar-night windows use), the addon's own
+        ok-confirmed journal moments and the BMS counter series, evaluated by
+        gridguard.reference.
 
         Evaluated at most once per local day (a completed night only ever
         appears at sunrise — like night_buckets), and AUDITED on EVERY actual
@@ -1496,28 +1503,27 @@ class RealDeps:
                 now=datetime.now(self.cfg.tz), tz=self.cfg.tz,
                 n_nights=self.cfg.reference_nights,
                 min_clip_min=float(self.cfg.reference_min_clip_min),
-                # three-tier rules (owner 2026-11-12): the deep tier2 walk +
-                # tier3 HOLD memory (the newest journaled clip reference)
+                # three-tier rules: the deep tier2 walk + tier3 HOLD memory
+                # (the newest journaled clip reference)
                 history_fn=lambda: self.bms.reference_history(),
                 max_lookback_days=self.cfg.reference_max_lookback_days)
-        except Exception:                  # noqa: BLE001 — consult side rule2026-10-23
+        except Exception:                  # noqa: BLE001 — consult side
             ref = None                     # ANY failure = honest median fallback
         self.audit("reference_load", inputs=reference_audit_inputs(ref))
         self._ref_cache = (today, ref)
         return ref
 
     def solar_day_prediction(self, target_date: date) -> dict:
-        """Phase C (the forecast onset link): predict the solar day and its
-        onset for `target_date` from the three EXISTING streams — the rolling
-        outlook (the reserve tier's own forecast transport, forecast_ok's
-        cache), the measured solar-edge history (deps.solar_windows) and the
-        yield_learned pairs (bms.yield_history, the payload's own query).
-        Evaluated at most once per (local day, target) and AUDITED on EVERY
-        actual evaluation as the event `solar_day_pred` with the FULL basis
-        (display-truth: a prediction is a LABEL, never state — the eve only
-        discloses its horizon source, night_need.onset_src). Honest
-        insufficient-shape dict on ANY consult failure → the caller keeps its
-        guards (no guess)."""
+        """Predict the solar day and its onset for `target_date` from the
+        three EXISTING streams — the rolling outlook (the reserve tier's own
+        forecast transport, forecast_ok's cache), the measured solar-edge
+        history (deps.solar_windows) and the yield_learned pairs
+        (bms.yield_history, the payload's own query). Evaluated at most once
+        per (local day, target) and AUDITED on EVERY actual evaluation as the
+        event `solar_day_pred` with the FULL basis (display truth: a
+        prediction is a LABEL, never state — the eve only discloses its
+        horizon source, night_need.onset_src). Honest insufficient-shape dict
+        on ANY consult failure → the caller keeps its guards (no guess)."""
         key = (datetime.now(self.cfg.tz).date(), target_date)
         if self._solar_pred_cache is not None and self._solar_pred_cache[0] == key:
             return self._solar_pred_cache[1]
@@ -1529,7 +1535,7 @@ class RealDeps:
                 target_date, forecast_days=outlook or [],
                 day_bounds=bounds or {}, yield_hist=self.bms.yield_history(10),
                 tz=self.cfg.tz)
-        except Exception:              # noqa: BLE001 — consult side rule2026-10-23
+        except Exception:              # noqa: BLE001 — consult side
             pred = None                # ANY failure = honest 'no prediction'
         if not isinstance(pred, dict):
             pred = {"predicted": None, "onset_h": None, "basis": "insufficient",
@@ -1544,13 +1550,13 @@ class RealDeps:
         return self.bms.phase_evidence(since_iso)
 
     def yield_learning(self) -> dict | None:
-        """L1 (owner2026-10-22): compare the SHIPPED solar forecast with the
-        MEASURED yield of the same completed solar day → factor (kWh into the
-        battery per kWh/m² forecast) — an ADDITIONAL dimension for the coming
-        day. Pure learning: never gates anything (v7). Once per local day;
-        honest None (no audit) when either side is missing. Unlike the F5
-        failure-cache rule, the None IS cached here — audit-dedup: one
-        attempt per local day, no re-learn after an honest miss."""
+        """Compare the SHIPPED solar forecast with the MEASURED yield of the
+        same completed solar day → factor (kWh into the battery per kWh/m²
+        forecast) — an ADDITIONAL dimension for the coming day. Pure learning:
+        never gates anything. Once per local day; honest None (no audit) when
+        either side is missing. Unlike the solar-window failure-cache rule,
+        the None IS cached here — audit-dedup: one attempt per local day, no
+        re-learn after an honest miss."""
         today = datetime.now(self.cfg.tz).date()
         now = datetime.now(self.cfg.tz)
         if self._yield_cache is not None and self._yield_cache[0] == today:
@@ -1561,11 +1567,11 @@ class RealDeps:
         try:
             bounds, _sp = self.solar_windows()
             sunset_today = self.solar_today_sunset()
-            # owner rule2026-10-23: a solar day is final only AT/AFTER its
-            # calendar sunset — an ONGOING day's provisional last-spike
-            # (b <= now while the sun is still up) must not count as a
-            # completed day (mid-day clouds would otherwise truncate — and
-            # poison — the learned day). Past dates are trivially final.
+            # a solar day is final only AT/AFTER its calendar sunset — an
+            # ONGOING day's provisional last-spike (b <= now while the sun is
+            # still up) must not count as a completed day (mid-day clouds
+            # would otherwise truncate — and poison — the learned day). Past
+            # dates are trivially final.
             def _final(d, end):
                 if end > now:
                     return False
@@ -1589,12 +1595,12 @@ class RealDeps:
                                "day_start": a.isoformat(timespec="minutes"),
                                "day_end": b.isoformat(timespec="minutes"),
                                "forecast_ts": doc.get("ts")}
-                        # L1 per-class yield (owner2026-10-25): the SAME
-                        # day-cache block asks for the day's grid-ON share —
-                        # exactly ONE share query per learned day. Netted by
-                        # design: a failing share query may NEVER take the
-                        # learning down (None/exception → class "unknown",
-                        # the factor line stays alive and audited).
+                        # per-class yield: the SAME day-cache block asks for
+                        # the day's grid-ON share — exactly ONE share query
+                        # per learned day. Netted by design: a failing share
+                        # query may NEVER take the learning down
+                        # (None/exception → class "unknown", the factor line
+                        # stays alive and audited).
                         try:
                             pct = self.day_grid_on_pct(a, b)
                         except Exception:        # noqa: BLE001 — netted by design
@@ -1607,21 +1613,20 @@ class RealDeps:
                         self.audit("yield_learned", inputs=out)
         except (BmsError, RuntimeError):
             out = None
-        # Cache the outcome unless today's day is still RUNNING (owner rule
-        # 2026-10-23): that case must retry after the sunset — retries hit
-        # only the solar-window cache, no new HTTP. Every other outcome is
-        # one attempt per local day (audit-dedup).
+        # Cache the outcome unless today's day is still RUNNING: that case
+        # must retry after the sunset — retries hit only the solar-window
+        # cache, no new HTTP. Every other outcome is one attempt per local day
+        # (audit-dedup).
         if not (out is None and today in bounds
                 and (sunset_today is None or now <= sunset_today)):
             self._yield_cache = (today, out)
         return out
 
     def night_buckets(self) -> list[dict]:
-        """v4 §3/§4: learned night buckets (one Wh figure per night, quality
+        """Learned night buckets (one Wh figure per night, quality
         classified) — recomputed at most once per local day over the same
         rolling HIST_DAYS window (like night_profile). Fetch errors propagate
-        (not cached) → _eve nets them to need=None (R8' conservative).
-        §13 (owner, updated 2026-10-22 "concept end-to-end"): the night
+        (not cached) → _eve nets them to need=None (conservative). The night
         window = the REAL solar-night SPANS from solar_windows() — the bms
         clock default (19–08) applies only while no boundary data exists."""
         today = datetime.now(self.cfg.tz).date()
@@ -1635,39 +1640,39 @@ class RealDeps:
         return buckets
 
     def bms_solar_window(self) -> list[float | None]:
-        """T6 grid-off input: pack.current samples covering >= SOLAR_HOLD_S."""
+        """grid-off input: pack.current samples covering >= SOLAR_HOLD_S."""
         return [s.pack_current for s in self.bms.samples_window(self.cfg.solar_hold_s)]
 
-    # T3 §9.1 (owner rule "release only with sun"): the ONE sun-gate verdict per
-    # consult — BOTH releases (morning grid-off and eve-release) consult it. The ratio
-    # itself stays forecast-free (controller ruling 2026-10-19); the gate adds the
-    # AND-condition at the two release points.
+    # release only with sun: the ONE sun-gate verdict per consult — BOTH
+    # releases (morning grid-off and eve-release) consult it. The ratio
+    # itself stays forecast-free; the gate adds the AND-condition at the two
+    # release points.
     def forecast_ok(self) -> tuple[bool, str]:
-        """§9.1 sun gate: fetch the morning forecast ONCE per consult and return
-        (ok, reason) — conservative by rule: missing data of ANY kind = False =
-        both releases stay blocked (the grid stays on).
+        """The sun gate: fetch the morning forecast ONCE per consult and
+        return (ok, reason) — conservative by rule: missing data of ANY kind
+        = False = both releases stay blocked (the grid stays on).
 
-        Order (controller ruling): fetch (WeatherClient.morning_radiation_j —
-        exception-swallowing, None on any failure) → ALWAYS ship the value into
-        the §12.1 history (also None = error day; ship errors never propagate
-        into the loop) → (False, "no weather data") on no client / r None →
-        (False, "MIN_J not set") on cfg.weather_min_j None → comparison.
-        `last_radiation_j` mirrors the fetched r for the audit inputs."""
+        Order: fetch (WeatherClient.morning_radiation_j —
+        exception-swallowing, None on any failure) → ALWAYS ship the value
+        into the forecast history (also None = error day; ship errors never
+        propagate into the loop) → (False, "no weather data") on no client /
+        r None → (False, "MIN_J not set") on cfg.weather_min_j None →
+        comparison. `last_radiation_j` mirrors the fetched r for the audit
+        inputs."""
         r = self.weather.morning_radiation_j() if self.weather is not None else None
         self.last_radiation_j = r
         try:
-            ship_forecast(self.cfg, r)          # §12.1 dual-write — also for None
+            ship_forecast(self.cfg, r)          # dual-write — also for None
         except Exception:                       # noqa: BLE001 — ship must never block the gate
             pass
-        # owner intake2026-10-23: storm-outage indicators (thunder CAPE +
-        # WMO code, precip probability, gusts + owner part3 radiation) — ships
-        # beside the forecast AND lands in the outlook cache the reserve-tier
-        # computation reads (the gate itself stays out of it — the tier is a
-        # separate latch, audited as reserve_tier).
+        # storm-outage indicators (thunder CAPE + WMO code, precip
+        # probability, gusts + radiation) — ships beside the forecast INTO THE
+        # OPENSEARCH CLUSTER — the reserve-tier and timer reads go STRAIGHT to
+        # that copy (no in-memory hand-off; the gate itself stays out of it —
+        # the tier is a separate latch, audited as reserve_tier).
         try:
             days = self.weather.daily_outlook() if self.weather is not None else None
-            self._set_outlook(days)
-            ship_outlook(self.cfg, days)
+            ship_outlook(self.cfg, days)        # cluster copy = the read source
         except Exception:                       # noqa: BLE001 — intake never blocks the gate
             pass
         if r is None:
@@ -1687,7 +1692,7 @@ class RealDeps:
         return val
 
     def timer_exists(self) -> bool:
-        """F2: device truth behind the rescue_timer_set flag. Conservative False on
+        """Device truth behind the rescue_timer_set flag. Conservative False on
         ChannelError — a stale timer is then RE-SET on the next rescue eve
         (idempotent rebuild of the same signature), a green eve simply skips a
         clear; the rebuild/clear signature logic keeps device truth converging."""
@@ -1728,13 +1733,13 @@ class RealDeps:
                     return False
             fields = {"action": {"type": action}, "channel": channel,
                       "result": "ok", "value": value}
-            if reason is not None:      # §9.7: the act line carries the reason
+            if reason is not None:      # the act line carries the reason
                 fields["inputs"] = {"reason": reason}
             self.audit("act", **fields)
             return True
 
         if action == "disable_on_timers":
-            return self._collision_clear()   # T5 ruling: THE call shape — DRY_RUN/verify/audit live there
+            return self._collision_clear()   # THE call shape — DRY_RUN/verify/audit live there
 
         raise ValueError(f"unknown action {action!r}")
 
@@ -1743,29 +1748,28 @@ class RealDeps:
         return inv["switch"], inv["timers"]
 
     def apply_plan(self, plan: TimerPlan) -> bool:
-        """v4 executor (spec §6): keep_grid writes nothing (True + audited with the
-        reason); failsafe_timer rides the ensure-on programming path — fresh read →
-        state merge (keep foreign timers, replace ANY grid timer of the target
-        STATE — a re-computed crossing must evict the stale one, owner find
-        2026-10-22) → write → read-back verify (exactly one armed timer, the
-        fresh signature). Dispatched kinds
-        (release_night / bring_on_now / none) never reach here — _eve owns them.
-        DRY_RUN suppresses every write (+True); audits carry
-        timer_action = ensure_on | clear | keep | noop (owner2026-10-23:
-        an already-armed identical signature skips the redundant write).
+        """Timer-plan executor: keep_grid writes nothing (True + audited with
+        the reason); failsafe_timer rides the ensure-on programming path —
+        fresh read → state merge (keep foreign timers, replace ANY grid timer
+        of the target STATE — a re-computed crossing must evict the stale one)
+        → write → read-back verify (exactly one armed timer, the fresh
+        signature). Dispatched kinds (release_night / bring_on_now / none)
+        never reach here — _eve owns them. DRY_RUN suppresses every write
+        (+True); audits carry timer_action = ensure_on | clear | keep | noop
+        (an already-armed identical signature skips the redundant write).
 
-        §27 STAMP CONTRACT (owner 2026-10-27): on every handled failsafe_timer
-        the executor stamps `data["armed_local"] = <datetime>` = what the DEVICE
-        holds AFTER this handoff — the verified write's crossing, the identical
-        program's crossing, or (within-deadband skip, no write) the armED
-        signature it kept. Stamps only on known device truth; failure paths and
-        DRY_RUN leave the key absent (the caller keeps its last confirmed value).
-        _eve reads it into st.last_planned_fire so the final push can state the
-        WRITE-CONFIRMED armed separately from the plan ideal."""
+        STAMP CONTRACT: on every handled failsafe_timer the executor stamps
+        `data["armed_local"] = <datetime>` = what the DEVICE holds AFTER this
+        handoff — the verified write's crossing, the identical program's
+        crossing, or (within-deadband skip, no write) the armed signature it
+        kept. Stamps only on known device truth; failure paths and DRY_RUN
+        leave the key absent (the caller keeps its last confirmed value).
+        _eve reads it into st.last_planned_fire so the final push can state
+        the WRITE-CONFIRMED armed separately from the plan ideal."""
         ok_all = True
         for kind, data in plan.actions:
             if kind == "clear_grid_timers":
-                # signal=False: _eve owns the plan-failure push (I1) — no double signal
+                # signal=False: _eve owns the plan-failure push — no double signal
                 ok = self._collision_clear(signal=False)
                 if not self.cfg.dry_run:
                     self.audit("act", action={"type": "clear_grid_timers"},
@@ -1774,8 +1778,8 @@ class RealDeps:
                 ok_all = ok_all and ok
                 continue
             if kind == "keep_grid":
-                # switch already ON — zero writes BY DESIGN (the owner's live
-                # choice; the grid-off gates release with sun). Audit = mirror + reason.
+                # switch already ON — zero writes BY DESIGN (the grid-off
+                # gates release with sun). Audit = mirror + reason.
                 self.audit("act", action={"type": "keep_grid"}, timer_action="keep",
                            result="ok", inputs={"reason": data.get("reason", "")})
                 continue
@@ -1783,12 +1787,12 @@ class RealDeps:
                 raise ValueError(f"unknown plan action {kind!r}")
             want, t_action = "on", "ensure_on"
             sig = local_cron(data["at_local"])
-            # display-truth doctrine (owner 2026-10-26): every ladder WRITE
-            # records its OWN programmed time in the act audit — the page's
-            # announced grid-on = the last result-ok ensure_on act (fire_str =
-            # the device-cron minute; at_local = the same instant as naive
-            # LOCAL wall-clock, matching atLocal — naive by run() contract,
-            # main.py run(): datetime.now(cfg.tz).replace(tzinfo=None))
+            # display-truth doctrine: every ladder WRITE records its OWN
+            # programmed time in the act audit — the page's announced grid-on
+            # = the last result-ok ensure_on act (fire_str = the device-cron
+            # minute; at_local = the same instant as naive LOCAL wall-clock,
+            # matching atLocal — naive by run() contract, main.py run():
+            # datetime.now(cfg.tz).replace(tzinfo=None))
             prog_inputs = {"fire_str": data.get("fire_str")
                            or data["at_local"].strftime("%H:%M"),
                            "at_local": data["at_local"].isoformat(
@@ -1798,12 +1802,12 @@ class RealDeps:
                            result="suppressed")
                 continue
             try:
-                _, timers = self.read_state()     # R4': fresh inventory, every action
+                _, timers = self.read_state()     # fresh inventory, every action
                 # dedup = the STATE target (do.switch), regardless of atLocal —
-                # owner live find 2026-10-22: keyed on (switch, atLocal), a
-                # RE-COMPUTED crossing (08:01 → 08:13) kept the stale timer and
-                # appended the new one: the device armed BOTH and fires the old
-                # one. A moved crossing must EVICT the stale timer.
+                # keyed on (switch, atLocal), a RE-COMPUTED crossing kept the
+                # stale timer and appended the new one: the device armed BOTH
+                # and fires the old one. A moved crossing must EVICT the stale
+                # timer.
                 keep = [t for t in timers
                         if (t.get("do") or {}).get("switch") != want]
                 armed_now = [t for t in timers
@@ -1811,47 +1815,45 @@ class RealDeps:
                              and t.get("enabled", 1) != 0]
                 if (len(armed_now) == 1 and armed_now[0].get("atLocal") == sig
                         and len(keep) + 1 == len(timers)):
-                    # owner ruling2026-10-23 (4002-Verweigerung): the actor
-                    # already holds EXACTLY this program — the fresh read IS
-                    # the verification (nothing changed in between) → skip the
-                    # redundant rewrite (~15/evening invited the refusal; the
-                    # crossing only ever moves ONCE per change). noop mirrors
-                    # _collision_clear's no-change branch.
-                    data["armed_local"] = data["at_local"]   # §27: device holds EXACTLY this
+                    # the actor already holds EXACTLY this program — the fresh
+                    # read IS the verification (nothing changed in between) →
+                    # skip the redundant rewrite (repeated identical writes
+                    # invite the device's refusal; the crossing only ever
+                    # moves ONCE per change). noop mirrors _collision_clear's
+                    # no-change branch.
+                    data["armed_local"] = data["at_local"]   # device holds EXACTLY this
                     if (kind, sig) != self._last_ok_act:   # ONE confirmation per state
-                        # owner2026-10-23 (log readability): the trail shows
-                        # decisions/changes (new signature, every
-                        # movement), not the 60-s heartbeat of the FINAL-
-                        # phase. Error and verify paths stay visible.
+                        # log readability: the trail shows decisions/changes
+                        # (new signature, every movement), not the 60-s
+                        # heartbeat of the FINAL phase. Error and verify paths
+                        # stay visible.
                         self._last_ok_act = (kind, sig)
                         self.audit("act", action={"type": kind}, timer_action="noop",
                                    channel="cloud", result="ok")
                     continue
-                # --- owner PHYSICS ruling 2026-10-26 (§19): the write DEADBAND
-                # — reprogram only on > WRITE_DEADBAND_MIN (20 min,
-                # owner-approved) crossing movement from the ARMED one. The
+                # --- the write DEADBAND — reprogram only on >
+                # WRITE_DEADBAND_MIN crossing movement from the ARMED one. The
                 # dedup's threshold semantics: |new − armed| <= X → the write
-                # itself is skipped (device stability + trail noise: the
-                # incident wrote 10 generations in 45 min), audited ONCE per
-                # (kind, armed signature) as a noop "within deadband". Beyond
-                # X (or an unparseable armed signature — no grace for
-                # incomparable device truth) the write runs and evicts the
-                # stale timer (the 2026-10-22 guarantee, scoped to real
-                # moves). Same semantics in the FINAL window: the armed
-                # signature stays the anchor everywhere (the crossing
-                # converges under the counter instrument; nothing is
-                # rewritten while it drifts within X).
+                # itself is skipped (device stability + trail noise —
+                # unbounded rewrites churn the device and flood the trail),
+                # audited ONCE per (kind, armed signature) as a noop "within
+                # deadband". Beyond X (or an unparseable armed signature — no
+                # grace for incomparable device truth) the write runs and
+                # evicts the stale timer (scoped to real moves). Same
+                # semantics in the FINAL window: the armed signature stays the
+                # anchor everywhere (the crossing converges under the counter
+                # instrument; nothing is rewritten while it drifts within X).
                 armed_sig = armed_now[0].get("atLocal") if len(armed_now) == 1 \
                     else None
                 move = (crossing_move_min(armed_sig, sig)
                         if len(armed_now) == 1 and len(keep) + 1 == len(timers)
                         else None)
                 if move is not None and move <= WRITE_DEADBAND_MIN:
-                    # §27: no write happened — the device KEEPS its armed
-                    # signature; stamp THAT (device truth, cron → wall clock on
-                    # the wanted crossing's date — display anchor only) so the
-                    # final push never labels the drifting ideal as armed.
-                    # M2 note (review): this DATE anchor can be a day off across
+                    # no write happened — the device KEEPS its armed
+                    # signature; stamp THAT (device truth, cron → wall clock
+                    # on the wanted crossing's date — display anchor only) so
+                    # the final push never labels the drifting ideal as
+                    # armed. NOTE: this DATE anchor can be a day off across
                     # midnight — only %H:%M is ever consumed from the stamp.
                     _m = _cron_minutes(armed_sig)
                     if _m is not None:
@@ -1866,7 +1868,7 @@ class RealDeps:
                                            "armed": armed_sig, "wanted": sig})
                     continue
                 self.cloud.set_timers(self.cfg.sw_deviceid, keep + [data["timer"]])
-                _, after = self.read_state()      # F4: verify read-back presence of the signature
+                _, after = self.read_state()      # verify read-back presence of the signature
                 armed = [t for t in after
                          if (t.get("do") or {}).get("switch") == want
                          and t.get("enabled", 1) != 0]
@@ -1880,14 +1882,15 @@ class RealDeps:
                     ok_all = False
                     continue
                 self._deadband_sig = None    # a real write re-arms the deadband note
-                data["armed_local"] = data["at_local"]   # §27: verified write = device holds it
-                if (kind, sig) != self._last_ok_act:   # s. noop-Zweig oben
+                data["armed_local"] = data["at_local"]   # verified write = device holds it
+                if (kind, sig) != self._last_ok_act:   # as in the noop branch above
                     self._last_ok_act = (kind, sig)
                     self.audit("act", action={"type": kind}, timer_action=t_action,
                                channel="cloud", result="ok",
                                inputs=prog_inputs)
             except ChannelError as e:
-                # I1: no push here — _eve pushes the honest failure signal once, on transition
+                # no push here — _eve pushes the honest failure signal once,
+                # on transition
                 self.audit("act_failed", action={"type": kind}, timer_action=t_action,
                            result=str(e))
                 ok_all = False
@@ -1906,9 +1909,10 @@ class RealDeps:
                 return True
             self.cloud.set_timers(self.cfg.sw_deviceid, new)
             _, verify = self.read_state()
-            # §12.2: "cleared" = NO timer armed anymore — BOTH classes (on AND off);
-            # robust: empty list → nothing armed → cleared ✓; a missing "enabled"
-            # field or a non-dict entry counts as armed (conservative, honest verify).
+            # "cleared" = NO timer armed anymore — BOTH classes (on AND off);
+            # robust: empty list → nothing armed → cleared ✓; a missing
+            # "enabled" field or a non-dict entry counts as armed
+            # (conservative, honest verify).
             still_armed = [t for t in verify
                            if not isinstance(t, dict) or t.get("enabled", 1) != 0]
             ok = not still_armed
@@ -1916,25 +1920,24 @@ class RealDeps:
                        channel="cloud", result="ok" if ok else "verify_failed")
             return ok
         except ChannelError as e:
-            if signal:      # direct calls (T5/grid-off) keep their signal; apply_plan path defers to _eve
+            if signal:      # direct calls (grid-off) keep their signal; apply_plan path defers to _eve
                 self.push("NO CHANNEL", msg(self.cfg.msg_lang, "no_channel", action="disable_on_timers"))
             self.audit("act_failed", action={"type": "disable_on_timers"}, result=str(e))
             return False
 
     def _is_rescue(self, t: dict) -> bool:
-        """v3 (R3''): a grid-ON timer = repeat timer that switches ON and is still
-        enabled. There is NO fixed atLocal anymore (t_fire is computed per eve and
-        programmed through apply_plan), so identity is direction + state —
-        deactivated (enabled:0) inventory never counts as armed."""
+        """A grid-ON timer = repeat timer that switches ON and is still
+        enabled. There is NO fixed atLocal anymore (t_fire is computed per
+        eve and programmed through apply_plan), so identity is direction +
+        state — deactivated (enabled:0) inventory never counts as armed."""
         return is_rescue_timer(t)
 
     def push(self, kind: str, text: str) -> None:
-        """§9.7 honest pushes: EVERY push is journaled into the jsonl (kind =
+        """Honest pushes: EVERY push is journaled into the jsonl (kind =
         the stable English event key, text capped at 60 chars — never the
         webhook URI) even when the ntfy call fails (try/finally); ntfy itself
         stays advisory-only. The ntfy DISPLAY title stays localized
-        (messages.title) — kind = the query key, title = the language layer
-        (owner ruling 2026-11-04)."""
+        (messages.title) — kind = the query key, title = the language layer."""
         try:
             ntfy_push(self.cfg.ntfy_webhook, title(kind, self.cfg.msg_lang), text)
         finally:
@@ -1943,7 +1946,7 @@ class RealDeps:
     def audit(self, event: str, **fields) -> None:
         try:
             self.audit_log.record(event, **fields)
-        except Exception as e:                         # T8 carry: never let audit kill run()
+        except Exception as e:                         # never let audit kill run()
             print(f"[audit] {e}", file=sys.stderr, flush=True)
 
     def cloud_alive(self) -> bool:
@@ -1962,20 +1965,18 @@ def run(cfg: Config) -> None:
     st = AppState()
     deps = RealDeps(cfg)
     deps.audit("start", result=f"dry_run={cfg.dry_run}")
-    # Restart-window safety (owner incident 2026-10-25 09:37:39 UTC): reload
-    # the durable reserve_tier decision (events index) into the fresh in-memory
-    # latch BEFORE the first decision tick — a deploy restart must never open
-    # the release gate at tier=0 while the owner-ordered tier still stands.
-    # Crash-netted like every consult side; no audit (a seed is not a new
-    # decision) — see restore_reserve_tier.
+    # Restart-window safety: reload the durable reserve_tier decision (events
+    # index) into the fresh in-memory latch BEFORE the first decision tick —
+    # a deploy restart must never open the release gate at tier=0 while the
+    # standing tier still applies. Crash-netted like every consult side; no
+    # audit (a seed is not a new decision) — see restore_reserve_tier.
     restore_reserve_tier(st, deps)
-    # Owner incident 2026-10-25: same seam for the day-scoped phase flags —
-    # a mid-day restart must not leave the phase stuck at MORNING (no eve
-    # roll → no night row in the frontend). See restore_phase_flags.
+    # same seam for the day-scoped phase flags — a mid-day restart must not
+    # leave the phase stuck at MORNING (no eve roll → no night row in the
+    # frontend). See restore_phase_flags.
     restore_phase_flags(st, deps, datetime.now(cfg.tz), cfg)
     # Web surface (page+payload+health) on a crash-netted daemon thread: a
-    # bind/start failure prints one honest line and the worker loop goes on
-    # (owner safety doctrine, spec §8-4).
+    # bind/start failure prints one honest line and the worker loop goes on.
     from .webservice import start as _web_start
     _web_start(cfg)
     while True:
@@ -1986,9 +1987,9 @@ def run(cfg: Config) -> None:
             tick(cfg, st, deps, now, probe_due=probe_due)
         except Exception as e:                        # noqa: BLE001 — the ruler must not die
             deps.audit("tick_error", result=f"{type(e).__name__}: {e}")
-        deps.forecast_refresh(st)   # owner2026-10-23: forecast revision path
-        # (self-throttled) + owner part3: re-evaluates the reserve tier from the
-        # fresh outlook (midday revision overwrites the latch, audits reserve_tier)
+        deps.forecast_refresh(st)   # forecast revision path (self-throttled)
+        # + re-evaluates the reserve tier from the fresh outlook (midday
+        # revision overwrites the latch, audits reserve_tier)
         sleep_s = {Phase.NIGHT: cfg.probe_night_s, Phase.MORNING: cfg.poll_morning_s,
                    Phase.DAY_HOLD: cfg.poll_fast_s, Phase.EVE_PLAN: cfg.poll_fast_s,
                    Phase.FINAL: min(60, cfg.poll_fast_s)}[phase]

@@ -4,8 +4,7 @@ from pathlib import Path
 from gridguard.switchlink import ChannelError, build_zeroconf_body, decrypt_response
 
 # Identity lives in ONE test config (fixtures/switchlink-identity.json) —
-# not hardcoded here; the file doubles as a worked example for repo users
-# (owner ruling 2026-11-04).
+# not hardcoded here; the file doubles as a worked example for repo users.
 IDENT = json.loads((Path(__file__).resolve().parent / "fixtures"
                     / "switchlink-identity.json").read_text())
 KEY = IDENT["SW_MAIN_DEVICEKEY"]

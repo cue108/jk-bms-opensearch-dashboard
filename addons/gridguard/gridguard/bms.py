@@ -6,7 +6,7 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timedelta  # deviation2: timezone import dropped with the utc-attach (unused)
+from datetime import datetime, timedelta  # timezone import dropped with the utc-attach (unused)
 from typing import Callable
 from zoneinfo import ZoneInfo
 
@@ -23,8 +23,8 @@ class BmsReading:
     charge_a: float | None
     soc: float | None
     remaining_ah: float | None
-    pack_v: float | None = None        # LIVE pack voltage (owner doctrine2026-10-20)
-    full_ah: float | None = None       # L2 wave1 (owner2026-10-25): capacity anchor for
+    pack_v: float | None = None        # LIVE pack voltage
+    full_ah: float | None = None       # capacity anchor for
                                         # the voltage-anchored energy model (interim BMS
                                         # figure — the learned band capacity supersedes)
 
@@ -54,18 +54,17 @@ def _minmax(cells: dict, fields: tuple[str, ...]) -> tuple[float | None, float |
 
 def _wh(cur: float | None, volt: float) -> float:
     """One per-minute doc → watt-hours: U × I × dt with dt = 1/60 h,
-    DISCHARGE SIDE ONLY — spec v4 §3 "energy management, not
-    amp management". Grid-on (|I| ≤ solar_noise_a), charge (I ≥ 0) and
+    DISCHARGE SIDE ONLY — energy management, not amp management. Grid-on
+    (|I| ≤ solar_noise_a), charge (I ≥ 0) and
     missing current all contribute exactly 0 Wh."""
     if cur is None or cur >= 0:
         return 0.0
     return -cur * volt / 60.0
 
 
-# Owner QA ruling 2026-10-21 (Aggregations-Doctrin): ALL energy integration
-# happens IN THE CLUSTER — this scripted_metric is the verbatim mirror of
-# gridguard/web_payload.py ENERGY_AGG/GG_SAMPLE_S (single source: the payload
-# block moved verbatim there out of frontend/server.py); the only local step
+# ALL energy integration happens IN THE CLUSTER — this scripted_metric is the
+# verbatim mirror of gridguard/web_payload.py ENERGY_AGG/GG_SAMPLE_S (single
+# source shared with the payload); the only local step
 # is the unit conversion × SAMPLE_S / 3.6e6 (per-minute ingestion cadence →
 # kWh). Samples absent in a gap contribute 0 (no fabricated fill).
 SAMPLE_S = 60.0            # one doc = one minute (mirror of frontend GG_SAMPLE_S)
@@ -82,8 +81,8 @@ ENERGY_AGG = {"e": {"scripted_metric": {
 class BmsSource:
     weather_index = "gridguard-weather-*"   # forecast-doc index (mirror of the
     # frontend GG_WEATHER literal; RealDeps may override from the cfg prefix)
-    events_index = "gridguard-events-*"     # L1 per-class yield (owner2026-10-25):
-    # §10b Decision-Index (mirror of cfg.events_index; RealDeps overrides from cfg)
+    events_index = "gridguard-events-*"     # the event index, read for per-class
+    # yields (mirror of cfg.events_index; RealDeps overrides from cfg)
     grid_switch_acts = ("switch_on", "switch_off")   # the labelled act docs that flip
     # the reconstructed grid state (failed/dry-run acts carry OTHER event names)
 
@@ -125,11 +124,10 @@ class BmsSource:
             if lo is None or not ts_raw:
                 continue
             ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
-            # deviation2: brief attached tz=utc to naive timestamps; its own test
-            # (and the interface "local-naive", plan line 931) expects naive kept
-            # as-is — see task-7-report.
+            # naive timestamps stay naive — the local-naive interface
+            # contract (a brief utc attach would break it)
             out.append((ts, lo))
-        out.sort(key=lambda p: p[0])   # deviation1: parse-layer ascending sort — see task-7-report
+        out.sort(key=lambda p: p[0])   # ascending sort lives in the parse layer
         return out
 
     def samples_window(self, minutes: int) -> list[BmsSample]:
@@ -154,7 +152,7 @@ class BmsSource:
         return out
 
     def samples_days(self, days: int) -> list[BmsSample]:
-        """v3 learner feed (spec R3''): rolling `days` window, `search_after`
+        """Learner feed: rolling `days` window, `search_after`
         pagination (size 10000, sort @timestamp asc). Stops at a short page
         (natural end) or at the 15000-sample cap; a capped run prints ONE note
         to stderr. Pages arrive ascending, so concatenation preserves order."""
@@ -197,7 +195,7 @@ class BmsSource:
     def night_buckets(self, days: int, tz_name: str, solar_noise_a: float,
                       window: tuple[float, float] | None = None, *,
                       spans: dict | None = None) -> list[dict]:
-        """GridGuard v4 night buckets (spec v4 §3/§4): ONE Wh figure per night.
+        """GridGuard night buckets: ONE Wh figure per night.
 
         Night = the LOCAL window [window_start_h, window_end_h) wrapping
         midnight (default 19.0 → 8.0, i.e. array_offset_h → array_onset_h —
@@ -206,7 +204,7 @@ class BmsSource:
         window ends) and buckets never span regimes: one window, one bucket,
         classified as a whole.
 
-        SPANS MODE (owner ruling2026-10-22 — "concept end-to-end"): when
+        SPANS MODE: when
         `spans` (the output of `periods.night_windows`) is given, a minute
         belongs to the solar-night window that CONTAINS it —
         span = (previous solar day's END, this solar day's START), half-open
@@ -216,7 +214,7 @@ class BmsSource:
         window. The clock window above remains the fallback whenever no
         boundary data exists.
 
-        Arithmetic location — documented deviation, controller-pre-approved:
+        Arithmetic location — a documented deviation:
         instead of one Painless aggregation, the per-minute docs are paged
         exactly like `samples_days` (search_after, size 10000, 15000-doc cap,
         `_source` reduced to @timestamp+pack) and integrated PER DOC in Python
@@ -225,7 +223,7 @@ class BmsSource:
         stays tiny and pure. A single Painless one-shot agg over the window
         filter is the future optimization and would replace only this loop.
 
-        Classification (§4, precedence order): OPEN (bucket's window end is
+        Classification (precedence order): OPEN (bucket's window end is
         still in the future — partial night) > SHORT (minutes < 0.6 × expected
         window minutes — "half the night ran" distorts the need downward) >
         GRID_ON (≥ 0.6 of minutes grid-on: |I| ≤ solar_noise_a) > MIXED
@@ -292,7 +290,7 @@ class BmsSource:
                     expected = (end_h - start_h) % 24 * 60
                 volt = dig(src, "pack.voltage")
                 if not isinstance(volt, (int, float)):
-                    continue   # owner doctrine 2026-10-20: no sensor value →
+                    continue   # no sensor value →
                                # NOT a measured minute (never invent voltage)
                 cur = dig(src, self.current_path)
                 if not isinstance(cur, (int, float)):
@@ -321,7 +319,7 @@ class BmsSource:
             print(f"[bms] night_buckets: capped at {cap} docs "
                   f"(days={days}) — older history dropped",
                   file=sys.stderr, flush=True)
-        # §4 classification in precedence order → chronological output
+        # classification in precedence order → chronological output
         out: list[dict] = []
         for night in sorted(acc):
             b = acc[night]
@@ -343,7 +341,7 @@ class BmsSource:
 
     def solar_day_boundaries(self, dates, tz_name: str, flow_a: float,
                              sun_fn) -> dict:
-        """Cluster-side solar-day rule (owner2026-10-22 — MIRRORS
+        """Cluster-side solar-day rule (MIRRORS
         periods.solar_day_bounds + the frontend day_bounds): per calendar
         date, the FIRST and LAST sample with pack.current >= flow_a between
         calendar sunrise and sunset (sun_fn(date) -> (rise, set) or None).
@@ -369,7 +367,7 @@ class BmsSource:
             if not sun or sun[0] is None or sun[1] is None:
                 continue
             rise, set_ = sun
-            # F5-1: open-meteo sun stamps are NAIVE local wall times — attach
+            # open-meteo sun stamps are NAIVE local wall times — attach
             # the boundary tz, else the cluster reads zone-less ISO as UTC
             # and the whole sun window shifts by the local offset (~2 h).
             # Aware stamps pass through unchanged.
@@ -399,7 +397,7 @@ class BmsSource:
         return bounds
 
     def day_charge_kwh(self, start: datetime, end: datetime) -> float | None:
-        """L1 measured yield (owner2026-10-22): ENERGY that reached the
+        """L1 measured yield: ENERGY that reached the
         BATTERY during the solar day — cluster aggregation (Aggregations-
         Doctrin): Σ U×I over the window with a charge-only filter
         (pack.current >= 0), × SAMPLE_S → Wh → kWh. None on failure."""
@@ -422,9 +420,9 @@ class BmsSource:
         """The ex-ante forecast SHIPPED for `day`: the earliest non-null
         forecast doc of that LOCAL ship-day (morning_radiation_j uses
         forecast_days=1 → sums[0] = the ship day's own sum; a doc with
-        local-ts on day D describes day D — confirmed live 2026-10-22:
-        index gridguard-weather-YYYY.MM.DD, kind="forecast", ts local-offset,
-        radiation_sum_j in J, null on error days). Queries the weather index
+        local-ts on day D describes day D (index
+        gridguard-weather-YYYY.MM.DD, kind="forecast", ts local-offset,
+        radiation_sum_j in J, null on error days)). Queries the weather index
         on the SAME cluster (self.os_url); never raises (audit-dedup in
         RealDeps caches the honest None)."""
         tz = ZoneInfo(tz_name)
@@ -444,7 +442,7 @@ class BmsSource:
         return hits[0].get("_source") if hits else None
 
     def day_grid_on_pct(self, start: datetime, end: datetime) -> float | None:
-        """L1 per-class yield (owner ruling 2026-10-25): the grid-ON share of
+        """L1 per-class yield: the grid-ON share of
         the window [start, end], reconstructed from the addon's OWN events-index
         labels — ONE bounded filter+sort query (size 50, Aggregations-Doctrin:
         no scan): act switch_on/switch_off + the state_observed journal.
@@ -515,7 +513,7 @@ class BmsSource:
         return on_min / total * 100.0
 
     def pack_v_avg(self, minutes: int) -> float | None:
-        """Owner physics ruling 2026-10-26 (§20): the Wh-conversion voltage for
+        """The Wh-conversion voltage for
         the eve's available is a cheap AVERAGE over the recent `minutes` — ONE
         cluster-side avg aggregation (Aggregations-Doctrin: no local scan, same
         home as day_charge_kwh); honest None on any failure or when no doc in
@@ -531,7 +529,7 @@ class BmsSource:
         return float(raw) if isinstance(raw, (int, float)) else None
 
     def reference_events(self, since: datetime) -> list[dict]:
-        """Owner REFERENCE-LOAD model (Phase A): the addon's OWN ok-confirmed
+        """The addon's OWN ok-confirmed
         switch moments since `since` — the same journal events the payload's
         announced/cancel queries read (grid switch acts, ensure_on program
         generations with their fire_str, the disable/clear cancels). One
@@ -558,7 +556,7 @@ class BmsSource:
         return [h["_source"] for h in resp.get("hits", {}).get("hits", [])]
 
     def yield_history(self, size: int = 10) -> list[dict]:
-        """Phase C input (own measurements): the newest `size` yield_learned
+        """Yield-learning input (own measurements): the newest `size` yield_learned
         events ({ts, inputs: day, measured_kwh, forecast_kwh_m2, factor, …}) —
         the learned forecast→measured pairs the solar-day prediction takes its
         plain median factor from. Same bounded newest-of-kind query the
@@ -572,7 +570,7 @@ class BmsSource:
         return [h["_source"] for h in resp.get("hits", {}).get("hits", [])]
 
     def reference_history(self, size: int = 3) -> list[dict]:
-        """Owner's THREE-TIER reference (rules 2026-11-12, tier3): the newest
+        """Tier3 of the THREE-TIER reference: the newest
         `size` reference_load audit events ({ts, inputs}) — the HOLD memory
         for when no fresh off-grid data exists (the last clip value stays the
         reference until new data arrives; the value wanders with every new
@@ -586,7 +584,7 @@ class BmsSource:
         return [h["_source"] for h in resp.get("hits", {}).get("hits", [])]
 
     def counter_series(self, start: datetime, end: datetime) -> list:
-        """Owner REFERENCE-LOAD model (Phase A): per-minute BMS counter docs
+        """Per-minute BMS counter docs
         `(ts aware, remaining_ah, pack voltage)` over [start, end] — the clip
         integration feed (ΔAh × V_mean per segment). Paged like samples_days
         (search_after, size 10000, 15000-doc cap ≫ the default 5-night span);
@@ -622,9 +620,9 @@ class BmsSource:
         return out
 
     def latest_reserve_tier(self) -> dict | None:
-        """Restart-window safety (owner incident 2026-10-25 09:37:39 UTC): the
+        """Restart-window safety: the
         NEWEST reserve_tier decision's `inputs` dict from the addon's OWN
-        events index (§10b) — ONE bounded query (size 1, sort ts desc,
+        events index — ONE bounded query (size 1, sort ts desc,
         aggregation doctrine: no scan), same home as day_grid_on_pct. The
         decision IS durable in the index; only the in-memory latch forgets it
         on every restart — the run() seed reloads it before the first tick.

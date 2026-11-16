@@ -1,12 +1,12 @@
-"""gridguard.solar_predict — Phase C: the forecast onset link
+"""gridguard.solar_predict — the forecast onset link
 ("Will there be a solar day tomorrow?") — horizon for sunless chains.
 
-Owner algorithm (his words, condensed): in a stretch of fine days the system
+Algorithm: in a stretch of fine days the system
 may expect tomorrow's solar-day start to be about the same time as yesterday's
 — when yesterday's weather was also fine; and the link between the SOLAR
 WEATHER FORECAST and the OWN SYSTEM MEASUREMENTS is already learnable from
 the data at hand, so the system can say whether tomorrow will have a solar
-day at all. "The amount of data merely helps produce a better average" —
+day at all. More data merely produces a better average —
 honest statistics, NO model machinery.
 
 Both inputs are EXISTING streams (injected as plain data, no second transport):
@@ -33,7 +33,7 @@ Every evaluation is audited by RealDeps.solar_day_prediction as the event
 `solar_day_pred` with this FULL basis (display-truth: predictions are
 labelled, never state).
 
-NAMED KNOBS (flagged for the owner — plain module constants, honest defaults):
+NAMED KNOBS (plain module constants, honest defaults):
 * SIM_KWH_TOL          ± kWh/m²/day: forecast target vs analog day = "similar"
 * ANALOG_LOOKBACK_DAYS how far back a recent measured sunny day still counts
 * ANALOG_MIN_FC_KWH    kWh/m²/day: below this the analog never claims a day

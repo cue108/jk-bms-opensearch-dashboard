@@ -1,5 +1,5 @@
-"""GridGuard v4 round A — spec v4 §3/§4: night buckets (cluster-granular Wh),
-quality classification truth table, CLEAN-only night need (round B decides)."""
+"""Night buckets (cluster-granular Wh), quality classification truth table,
+CLEAN-only night need."""
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
@@ -15,7 +15,7 @@ DAY0 = datetime(2026, 10, 1)     # all fixture nights sit WELL in the past
 # ---------------------------------------------------------------- helpers ---
 def _docs(stamps: list[datetime], cur=None, volt=13.1) -> list[dict]:
     """Fake ES hits: naive local stamps (treated as wall time in tz).
-    Voltage defaults to the REAL 4S pack (~13.1 V) — owner doctrine: fixtures
+    Voltage defaults to the REAL 4S pack (~13.1 V) — fixtures
     carry sensor values, never a textbook constant. volt=None = doc WITHOUT
     pack.voltage (the exclusion case)."""
     hits = []
@@ -43,7 +43,7 @@ def _source(hits: list[dict]) -> BmsSource:
 
 # ------------------------------------------- item 1: _wh (the one formula) ---
 def test_wh_helper_integrates_discharge_side_only():
-    """U × I × dt, dt = 1/60 h: only I < 0 contributes (spec §3)."""
+    """U × I × dt, dt = 1/60 h: only I < 0 contributes (discharge side)."""
     assert _wh(-12.0, 13.1) == pytest.approx(12.0 * 13.1 / 60.0)   # 2.62 Wh/min
     assert _wh(0.0, 13.1) == 0.0            # grid-on minute → exactly 0
     assert _wh(5.0, 13.1) == 0.0            # charge (sun) → 0
@@ -68,13 +68,13 @@ def test_default_window_label_boundaries_and_tz():
     assert [b["minutes"] for b in out] == [4, 1]        # boundary docs excluded
     assert out[0]["wh"] == pytest.approx(4 * 10 * 13.1 / 60.0)
     assert set(out[0]) == {"night", "wh", "minutes", "on_minutes", "status"}
-    # both windows long past (2026-10) → SHORT, never OPEN
+    # both windows long past → SHORT, never OPEN
     assert [b["status"] for b in out] == ["SHORT", "SHORT"]
 
 
-# ----------------------------------- classification truth table (spec §4) ---
+# ----------------------------------- classification truth table ---------------
 def test_classification_truth_table_pinned_per_status():
-    """One call, six nights — every §4 class pinned, precedence pinned:
+    """One call, six nights — every class pinned, precedence pinned:
     OPEN > SHORT > GRID_ON > MIXED > CLEAN. Window (22:00, 23:00) →
     expected = 60 min, SHORT threshold 0.6 × 60 = 36 docs."""
     w = (22.0, 23.0)
@@ -105,11 +105,11 @@ def test_classification_truth_table_pinned_per_status():
     assert set(out[0]) == {"night", "wh", "minutes", "on_minutes", "status"}
 
 
-# -------------------------------------- §3 integration math (per-minute) ----
+# -------------------------------------- integration math (per-minute) ---------
 def test_integration_discharge_only_157_2_wh():
     """Minute series: 60 × −12 A at the fixture voltage 13.1 → ≈157.2 Wh;
     grid-on minutes at 0 A count into on_minutes but add 0 Wh; a +5 A charge
-    minute adds 0 Wh (discharge side only, spec §3). Window (21, 23)."""
+    minute adds 0 Wh (discharge side only). Window (21, 23)."""
     hits: list[dict] = []
     hits += _docs(_stamps(datetime(2026, 10, 12), 60, hour=22), cur=-12.0)
     hits += _docs(_stamps(datetime(2026, 10, 12), 15, hour=21), cur=0.0)
@@ -124,7 +124,7 @@ def test_integration_discharge_only_157_2_wh():
 
 
 def test_voltage_missing_doc_is_excluded_never_invented():
-    """Owner doctrine (2026-10-20): sensor values beat textbook constants —
+    """Sensor values beat textbook constants —
     a doc WITHOUT pack.voltage is NOT a measured minute (no Wh, no minute,
     no on-minute; never a phantom25.6 V energy). A doc without CURRENT but
     with voltage counts a minute, adds no Wh, is not grid-on. And a night
@@ -207,7 +207,7 @@ def test_night_buckets_short_page_ends_without_cap(capsys):
     assert capsys.readouterr().err == ""                    # nothing dropped
 
 
-# ---------------- solar-day boundaries (owner rule2026-10-22: one per day) ---
+# ---------------- solar-day boundaries (one per day) --------------------------
 from datetime import date as _date
 from gridguard.bms import BmsSource as _BS
 
@@ -295,7 +295,7 @@ def _spans_source(hits):
 
 
 def test_night_buckets_spans_assign_by_window_not_clock():
-    # night labeled 2026-10-03 spans (Oct 2 18:33, Oct 3 09:13)
+    # the night labeled by its morning date spans (evening Oct 2 18:33 → morning Oct 3 09:13)
     spans = {_date(2026, 10, 3): (datetime(2026, 10, 2, 18, 33),
                                   datetime(2026, 10, 3, 9, 13))}
     hits = _docs([
@@ -331,7 +331,7 @@ def test_day_charge_kwh_cluster_agg_positive_only():
 
     def _search(body, a, b, c):
         captured.update(body)
-        # canned: Σ U×I over the window → applied factor below (R1 ruling)
+        # canned: Σ U×I over the window → applied factor below
         return {"aggregations": {"e": {"value": 64800.0}}}
     src._search = _search
     out = src.day_charge_kwh(datetime(2026, 10, 21, 9, 13),
@@ -360,4 +360,4 @@ def test_forecast_doc_for_day_uses_ship_day():
     assert {"range": {"radiation_sum_j": {"gte": 0}}} in flt
     ts_gte = next(f["range"]["ts"]["gte"] for f in flt
                   if "range" in f and "ts" in f["range"])
-    assert ts_gte.startswith("2026-10-21T00")   # R2: LOCAL day start iso
+    assert ts_gte.startswith("2026-10-21T00")   # LOCAL day start iso

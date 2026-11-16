@@ -20,7 +20,7 @@ _ID, _TITLE, _ORDER, _HASHES = "gridguard", "Energie Management", 20, ["grid"]
 
 
 def health_payload(os_url: str, events_index: str) -> dict:
-    """Self-description + heartbeat (spec §3.2). Freshness = the pill's own
+    """Self-description + heartbeat. Freshness = the pill's own
     rule (JS): cad = 1800 s at night else 600 s; fresh iff age <= 2*cad."""
     idx = events_index if events_index.endswith("*") else events_index + "-*"
     age_s = newest_ts = phase = None
@@ -75,7 +75,7 @@ def create_server(host, port, os_url, events_index):
 
 def start(cfg) -> None:
     """Daemon web thread inside the worker — a failure must never kill the
-    loop (owner safety doctrine): start wrapped, honest line, worker on."""
+    loop: start wrapped, honest line, worker on."""
     import os, threading
     try:
         srv = create_server("0.0.0.0", int(os.environ.get("WEB_PORT", "8101")),

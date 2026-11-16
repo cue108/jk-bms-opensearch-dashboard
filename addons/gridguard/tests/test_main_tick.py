@@ -32,13 +32,13 @@ NEED300 = buckets(300.0, 300.0)                       # need = 300 Wh
 NEED800 = buckets(800.0, 800.0)                       # need = 800 Wh
 FULL_AH = 222.0                                       # FakeDeps capacity anchor (BMS soc.full_ah)
 AH400 = 300.0 / PACK_V                                # remaining_ah fixture (300 Wh at v_avg=PACK_V)
-# --- owner physics ruling 2026-10-26 (§19/§20): available = remaining_ah × V_avg
+# --- available = remaining_ah × V_avg
 # (the BMS counter = the trusted mid-range instrument; FakeDeps v_avg defaults
 # to PACK_V → available = AH400 × PACK_V = 300.0 Wh). The corrected-voltage SOC
-# path no longer feeds the eve's available. Owner floor law 2026-11-13 (no floor
+# path no longer feeds the eve's available. Floor law (no floor
 # outside the UPS): the RAW remaining is the head — the fixture must therefore
 # sit INSIDE the 11 h learned night (400 Wh ÷ 32.73 Wh/h = 12.2 h → beyond the
-# horizon → "none", nothing to schedule). The names keep the §20 history.
+# horizon → "none", nothing to schedule). The names keep their history.
 def _corr(min_v, charge=0.0):
     """IR correction like verdict.corrected_min_cell_v (defaults r_cell_ohm)."""
     return min_v - charge * cfg.r_cell_ohm
@@ -46,9 +46,9 @@ def _corr(min_v, charge=0.0):
 
 FLOOR_WH = 85.25                                       # fixture energy base (number kept; the textbook table left the source)
 V400 = 3.26                                           # minimum-cell fixture (deep-band disclosure)
-AV400 = 300.0                                         # available = AH400 × PACK_V (§20 anchor; < rate×11 h so the raw crossing stays in-night)
-# v5 schedule: rate = safety × need ÷ night_len; raw head (owner floor law
-# 2026-11-13: no floor outside the UPS) ÷ rate = the programmed crossing
+AV400 = 300.0                                         # available = AH400 × PACK_V (the anchor; < rate×11 h so the raw crossing stays in-night)
+# schedule: rate = safety × need ÷ night_len; raw head (floor law
+# no floor outside the UPS) ÷ rate = the programmed crossing
 FIRE_EVE = D(20, 10) + timedelta(hours=(AV400) / (300.0 * 1.2 / 11.0))
 # same math with SUFF edges (onset 8 − offset 19 = 13 h learned night)
 FIRE_SUFF = D(20, 10) + timedelta(hours=(AV400) / (300.0 * 1.2 / 13.0))
@@ -63,11 +63,11 @@ class FakeDeps:
                  pack_v=PACK_V, reserve_tier_inputs=None, v_avg=PACK_V, ref=None):
         self.min_v, self.charge, self.remaining_ah = min_v, charge, remaining_ah
         self.pack_v = pack_v
-        # owner physics ruling 2026-10-26 (§20): the Wh-conversion voltage is a
+        # the Wh-conversion voltage is a
         # cheap AVERAGE over the recent minutes — the fake defaults it to
         # pack_v so the counter value IS the available (v_avg × remaining_ah)
         self.v_avg = v_avg
-        # restart seed (owner fix 2026-10-25): the newest reserve_tier event's
+        # restart seed: the newest reserve_tier event's
         # INPUTS — dict = found, None = no docs, Exception instance = raises
         self.reserve_tier_inputs = reserve_tier_inputs
         self.pack_current, self.soc_pct = pack_current, soc_pct
@@ -76,12 +76,12 @@ class FakeDeps:
         self.solar_window = solar_window if solar_window is not None else []
         self.inventory_timers = inventory_timers if inventory_timers is not None else \
             []   # realistic evening: the sunrise-clear disarms the night's
-                 # program by dawn — a standing timer must be EXPLICIT (owner
-                 # ruling 2026-11-13: the standing program = the prediction)
+                 # program by dawn — a standing timer must be EXPLICIT (the
+                 # standing program = the prediction)
         self.fail_read, self.fail_acts = fail_read, fail_acts
         self.profile = profile if profile is not None else INSUFF   # no edges → 11 h night
         self.buckets = list(buckets) if buckets is not None else []  # v4: [] → need None
-        # T3 §9.1 sun gate: the fake forecast verdict (+ the audit mirror r)
+        # sun gate: the fake forecast verdict (+ the audit mirror r)
         self.sun_ok, self.sun_reason = sun_ok, sun_reason
         self.radiation_j = radiation_j
         self.last_radiation_j, self.forecast_calls = None, 0
@@ -90,7 +90,7 @@ class FakeDeps:
         # Phase C: the forecast onset prediction the eve consults — None by
         # default (old behavior: no prediction source); pred_calls counts asks
         self.pred, self.pred_calls = None, 0
-        # the drain gate's reality anchor (owner rules 2026-11-13): None =
+        # the drain gate's reality anchor: None =
         # the old world (the eve keeps its median; the gate holds conservatively)
         self.ref = ref
 
@@ -116,10 +116,10 @@ class FakeDeps:
     def bms_samples_2h(self):
         t0 = D(19, 0)
         return [(t0, self.remaining_ah), (t0 + timedelta(hours=1), self.remaining_ah)]
-    def pack_v_avg(self):                                # owner §20: conversion average
+    def pack_v_avg(self):                                # conversion average
         return self.v_avg
     def bms_solar_window(self): return list(self.solar_window)
-    def latest_reserve_tier(self):                       # restart seed (owner fix 2026-10-25)
+    def latest_reserve_tier(self):                       # restart seed
         if isinstance(self.reserve_tier_inputs, Exception):
             raise self.reserve_tier_inputs
         return self.reserve_tier_inputs
@@ -131,7 +131,7 @@ class FakeDeps:
         return getattr(self, "spans", None) or {}
     def night_buckets(self): return list(self.buckets)      # v4: CLEAN-median need feed
     def yield_learning(self): return None                   # L1: learning only (no effect)
-    def forecast_ok(self):                                  # T3 §9.1 sun gate (Deps contract)
+    def forecast_ok(self):                                  # sun gate (Deps contract)
         self.forecast_calls += 1
         self.last_radiation_j = self.radiation_j            # audit mirror of r
         return self.sun_ok, self.sun_reason
@@ -145,7 +145,7 @@ class FakeDeps:
         if action == "switch_on": self.switch = "on"
         if action == "switch_off": self.switch = "off"
         if action == "disable_on_timers":
-            self.inventory_timers = [          # §12.2: BOTH classes disarmed (matches RealDeps)
+            self.inventory_timers = [          # BOTH classes disarmed (matches RealDeps)
                 {**t, "enabled": 0}
                 for t in self.inventory_timers]
             self.audit("act", action={"type": "disable_on_timers"})   # T5 shape: audit like RealDeps
@@ -160,7 +160,7 @@ class FakeDeps:
 
 
 def eve_bring_on(cls=FakeDeps, **kw):
-    """The eve bring-on path under the voltage rule (owner ruling2026-10-25):
+    """The eve bring-on path under the voltage rule:
     the cells sit ON the floor (corrected ≤ TRUE_FLOOR_V) with switch grid-off —
     the emergency already fired today and is confirmed via emergency_ack,
     so _eve (not the trigger) owns the conservative ON when the
@@ -207,7 +207,7 @@ def test_read_state_failure_throttled_push():
 def test_deep_floor_emergency_in_with_verify():
     st, deps = AppState(), FakeDeps(min_v=2.89, switch="off")
     tick(cfg, st, deps, D(14, 0))
-    # §12.2 final-review F1: the emergency clears ALL timers BEFORE it switches
+    # emergency order pin: the emergency clears ALL timers BEFORE it switches
     assert deps.acts == [("disable_on_timers", None, None, False, None),
                          ("switch_on", None, None, True, None)]
     assert deps.pushes[0][0] == "EMERGENCY" and st.emergency_ack == D(14, 0).date()
@@ -216,7 +216,7 @@ def test_deep_floor_emergency_in_with_verify():
 
 
 def test_emergency_on_clears_timers_first_then_switches():
-    # final-review F1 (b): §12.2 „on every intervention" — order pinned:
+    # "on every intervention" order pinned:
     # disable_on_timers act BEFORE the switch_on act (emergency protection), and
     # the clear result flag lands in the audit input timer_clear.
     st, deps = AppState(), FakeDeps(
@@ -231,7 +231,7 @@ def test_emergency_on_clears_timers_first_then_switches():
 
 
 def test_emergency_on_runs_even_when_timer_clear_fails():
-    # final-review F1 (c): best-effort proof — clear False → switch_on happens
+    # best-effort proof: clear False → switch_on happens
     # ANYWAY (the emergency must never depend on a timer block); the audit
     # carries timer_clear False, no extra push for the clear.
     class NoClear(FakeDeps):
@@ -249,7 +249,7 @@ def test_emergency_on_runs_even_when_timer_clear_fails():
 
 
 def test_low_capacity_in_when_floor_reached():
-    # Voltage successor of the old counter trigger (owner ruling2026-10-25):
+    # Voltage successor of the old counter trigger:
     # corrected minimum cell 3,14 V ≤ TRUE_FLOOR_V → low-capacity IN; the
     # counter (4,5 Ah) sits beside it only as an audit number.
     st, deps = AppState(), FakeDeps(min_v=3.14, remaining_ah=4.5, switch="off")
@@ -321,8 +321,8 @@ def test_collision_failure_aborts_grid_off():
     assert not any(a[0] == "switch_off" for a in deps.acts)
 
 
-# --- T3 §9.1 sun gate on the morning grid-off release (conservative on missing data) --
-# §13 v7 SUPERSEDED: test_morning_aus_suppressed_when_forecast_not_ok — the morning
+# --- sun gate on the morning grid-off release (conservative on missing data) ---
+# SUPERSEDED: test_morning_aus_suppressed_when_forecast_not_ok — the morning
 # consults NO forecast at all (see test_v7_drain_is_unconditional_above_the_floor:
 # forecast_calls == 0); there is no suppression branch anymore to pin.
 
@@ -330,7 +330,7 @@ def test_collision_failure_aborts_grid_off():
 def test_morning_aus_audit_carries_drain_ground():
     # v7: the release happens because the battery sits above the safety floor and
     # has stored solar to give — ground="drain", floor in force, NO forecast facts.
-    # owner2026-10-25: the floor is the VOLTAGE (floor_v + min_cell_corr), not
+    # the floor is the VOLTAGE (floor_v + min_cell_corr), not
     # the counter's Ah figure anymore.
     st, deps = AppState(), FakeDeps(remaining_ah=60.0, soc_pct=55.0, switch="on",
                                     solar_window=[], sun_ok=True)
@@ -345,9 +345,9 @@ def test_morning_aus_audit_carries_drain_ground():
 
 
 def test_drain_release_needs_thirty_minutes_of_span():
-    """Owner rules 2026-11-13 (the minute-flap): the DRAIN release gets the
+    """The minute-flap rule: the DRAIN release gets the
     same reality anchor as the eve — the projected grid-off span (raw head ÷
-    reference rate; owner floor law 2026-11-13: no floor outside the UPS)
+    reference rate; no floor outside the UPS)
     must reach release_min_span_min (30) minutes. At ≈51 Wh raw head @ 133
     Wh/h ≈ 23 min the gate holds the grid ON — the LiFePO4 REBOUND still
     misled the plain voltage check (ON = no load = the cells rebound) and
@@ -361,7 +361,7 @@ def test_drain_release_needs_thirty_minutes_of_span():
 
 
 def test_eve_keeps_the_standing_program_instead_of_rearming():
-    """Owner ruling 2026-11-13 ("a SINGLE grid on prediction"): an armed
+    """A SINGLE grid-on prediction: an armed
     program on the device IS the night's prediction from the load-profile
     snapshot — the eve must NOT rewrite it every tick (the re-arm followed
     the rebound-contaminated counter, wandered 21:10 → 21:24 and finally
@@ -378,7 +378,7 @@ def test_eve_keeps_the_standing_program_instead_of_rearming():
     assert not any(p[0] == "failsafe_timer" for p in deps.plan_seen)
 
 
-# §13 v7 SUPERSEDED: test_morning_gate_not_consulted_when_aus_condition_false — the
+# SUPERSEDED: test_morning_gate_not_consulted_when_aus_condition_false — the
 # "no candidate" concept is gone; forecast_calls == 0 is pinned on the drain release
 # and the hold case on test_v7_safety_floor_outranks_everything.
 
@@ -408,7 +408,7 @@ def test_eve_release_night_runs_aus_collision_first():
     assert deps.acts[2][4] is not None                      # the retry's switch_off carries a reason
     assert deps.switch == "off" and deps.inventory_timers[0]["enabled"] == 0
     assert st.evening_verdict == "rescue_timer" and st.morning_done  # combo end state = armed return
-    # owner ruling 2026-11-13 ("a SINGLE grid on prediction"): the standing
+    # a SINGLE grid-on prediction: the standing
     # program IS the prediction — kept (no rewrite), stamps ride the projection
     assert any(e == "eve_snapshot_kept" for e, _ in deps.audits)
     assert st.rescue_timer_set is True and st.last_planned_fire == FIRE_EVE
@@ -456,8 +456,8 @@ def test_eve_keep_grid_hold_push_reason():
 
 
 def test_eve_keep_grid_at_floor_reserve():
-    # v5: ON + head ≤ 0 → keep_grid with the floor reason. Owner floor law
-    # 2026-11-13: outside the UPS there is no band — only the BMS zeros leave
+    # ON + head ≤ 0 → keep_grid with the floor reason. Floor law:
+    # outside the UPS there is no band — only the BMS zeros leave
     # the middle band (avail 0 Ah → head = 0). The floor-trigger case
     # (3,14 V corrected) stays.
     st = AppState(); st.morning_done = True
@@ -468,9 +468,9 @@ def test_eve_keep_grid_at_floor_reserve():
     assert deps.pushes[0][1] == "reason: battery at floor reserve only"
 
 
-# --- T3 §9.1 sun gate on the evening release (eve-release v4) -------------------
+# --- sun gate on the evening release ------------------------------------------
 def test_eve_spends_regardless_of_sun_gate():
-    # §13: the FORECAST does not gate the eve spend (the gate = the morning):
+    # the FORECAST does not gate the eve spend (the gate = the morning):
     # sun_ok=False still runs the release; the gate facts still ride the audit
     st = AppState(); st.morning_done = True
     deps = FakeDeps(min_v=V400, remaining_ah=AH400, switch="on", inventory_timers=[],
@@ -496,7 +496,7 @@ def test_eve_release_runs_when_sun_gate_ok():
 
 
 def test_eve_off_known_need_schedules_even_when_sun_gate_holds():
-    # v5 (§13): OFF + known need + sun_ok=False → the battery-first schedule
+    # OFF + known need + sun_ok=False → the battery-first schedule
     # (the programmed return at the crossing), NOT the conservative bring_on
     st = AppState()
     deps = FakeDeps(min_v=V400, remaining_ah=AH400, switch="off", inventory_timers=[],
@@ -584,9 +584,9 @@ def test_eve_failsafe_applied_then_released_final_honest():
     re_fire = D(21, 56) + timedelta(
         hours=(AV400) / (300.0 * 1.2 / 11.0))
     assert st.last_planned_fire == re_fire
-    # §27 RETIME: the final no longer fires at the FIRST final tick (21:56 — the
-    # incident's own timing this test used to pin) but at the eve's CLOSING
-    # (first tick ≥ window_end); content moves to the §27 wording (armed leads).
+    # RETIME: the final no longer fires at the FIRST final tick (21:56 — the
+    # stale timing this test used to pin) but at the eve's CLOSING
+    # (first tick ≥ window_end); content moves to the final wording (armed leads).
     tick(cfg, st, deps, D(22, 1))
     finals = [t for p, t in deps.pushes if p == "NIGHT PLAN" and "final" in t]
     assert finals and f"switch time {re_fire.strftime('%H:%M')} (write-confirmed)" in finals[-1]
@@ -633,7 +633,7 @@ SUPPRESS = "grid-off rule active/contested — grid stays off, restrained as bef
 
 
 def test_eve_bring_on_suppressed_when_drain_rule_would_revert():
-    # §13 v7: the battery sits ABOVE the floor → the drain rule would switch OFF
+    # v7: the battery sits ABOVE the floor → the drain rule would switch OFF
     # again right after any bring_on → flip-flop. Guard: NO switch_on, audit, ZERO push.
     st = AppState()                                          # fresh day: morning_done False
     deps = FakeDeps(min_v=3.30, remaining_ah=AH400, soc_pct=65.0, switch="off",
@@ -675,9 +675,9 @@ def test_eve_bring_on_suppressed_after_aus_release_same_day():
 
 def test_eve_suppressed_bring_on_still_sends_final_summary():
     # suppression skips the verdict transition but NOT the FINAL block: the
-    # once-per-day summary push still fires exactly once — §27 RETIME: at the
+    # once-per-day summary push still fires exactly once — RETIME: at the
     # eve's CLOSING (old timing pinned it at the first final tick 21:56, the
-    # incident), and explicitly NOT during the eve itself anymore.
+    # stale push), and explicitly NOT during the eve itself anymore.
     st = AppState(); st.morning_done = True
     deps = FakeDeps(remaining_ah=AH400, soc_pct=65.0, switch="off",
                     inventory_timers=[], buckets=[])
@@ -734,7 +734,7 @@ def test_same_tick_aus_off_no_duplicate_release_when_ratio_ok():
 
 def test_eve_night_need_audit_every_tick_full_fidelity():
     # v4: night_need lands EVERY eve tick (idempotency of pushes stays transition-guarded).
-    # owner physics ruling 2026-10-26 (§19/§20): available = remaining_ah ×
+    # available = remaining_ah ×
     # V_avg (anchor + conversion average disclosed), available_bms_wh = the
     # SAME counter against the INSTANT pack voltage (avg-vs-instant line).
     st = AppState(); st.morning_done = True
@@ -765,11 +765,11 @@ def test_eve_night_need_audit_every_tick_full_fidelity():
 
 
 def test_eve_available_comes_from_the_counter_times_voltage_average():
-    # Owner PHYSICS ruling 2026-10-26 (§19/§20): available = remaining_ah ×
+    # available = remaining_ah ×
     # V_avg — the BMS counter IS the trusted mid-range instrument (its internal
     # amp-integration); the corrected-voltage SOC path is REMOVED from the
-    # eve's available (tonight's 46 mV compressor sag swung it for hours = the
-    # oscillation incident, handoff §18). Voltage keeps ONLY the deep band +
+    # eve's available (the 46 mV compressor sag swung it for hours = the
+    # oscillation failure mode). Voltage keeps ONLY the deep band +
     # the min_cell_corr/soc_pct_v disclosure lines. The counter drives the
     # crossing exactly.
     st = AppState(); st.morning_done = True
@@ -782,7 +782,7 @@ def test_eve_available_comes_from_the_counter_times_voltage_average():
     assert night["available_bms_wh"] == 12.0 * PACK_V        # same counter, INSTANT V
     assert night["min_cell_v"] == 3.26                       # deep-band disclosure kept
     assert night["min_cell_corr"] == 3.26 - 0.5 * cfg.r_cell_ohm
-    # the crossing = the counter's own remaining ÷ rate (owner final law 2026-11-13:
+    # the crossing = the counter's own remaining ÷ rate (final law:
     # no UPS = NO floor subtraction, the physics at the BMS zeros = the floor)
     expected = D(20, 10) + timedelta(
         hours=(12.0 * 13.05) / (300.0 * 1.2 / 11.0))
@@ -799,9 +799,9 @@ def test_final_plan_states_actual_failsafe_timer():
         hours=(AV400) / (300.0 * 1.2 / 11.0))
     tick(cfg, st, deps, D(21, 56))
     assert st.last_planned_fire == second_fire
-    # §27 RETIME: the old assertion pinned the final at the FIRST final tick
-    # (21:56) with the pre-§27 "timer <time>" text — it was the incident's own
-    # timing. The push now fires at the eve's CLOSING with the write-confirmed
+    # RETIME: the old assertion pinned the final at the FIRST final tick
+    # (21:56) with the old "timer <time>" text — it was the stale timing. The
+    # push now fires at the eve's CLOSING with the write-confirmed
     # armed as the headline (same value here: the write world).
     tick(cfg, st, deps, D(22, 1))
     finals = [t for p, t in deps.pushes if p == "NIGHT PLAN" and "final" in t]
@@ -814,8 +814,8 @@ def test_final_plan_says_no_timer_without_programming():
     deps = FakeDeps(remaining_ah=100.0, switch="on", inventory_timers=[])   # need unknown → keep
     tick(cfg, st, deps, D(20, 10))
     tick(cfg, st, deps, D(21, 56))
-    # §27 RETIME: "no timer" honesty now arrives at the eve's CLOSING, not at
-    # the first final tick (old timing = the incident's stale push).
+    # RETIME: "no timer" honesty now arrives at the eve's CLOSING, not at
+    # the first final tick (old timing = the stale push).
     tick(cfg, st, deps, D(22, 1))
     finals = [t for p, t in deps.pushes if p == "NIGHT PLAN" and "final" in t]
     assert finals and "no timer" in finals[-1]
@@ -826,7 +826,7 @@ def test_final_push_once():
     deps = FakeDeps(remaining_ah=5.0, switch="on", inventory_timers=[])
     tick(cfg, st, deps, D(21, 56))                      # eve ran (keep) — no push yet
     assert not any(p[0] == "NIGHT PLAN" for p in deps.pushes)
-    tick(cfg, st, deps, D(22, 1))                       # §27 closing: the ONE final
+    tick(cfg, st, deps, D(22, 1))                       # closing: the ONE final
     assert any(p[0] == "NIGHT PLAN" for p in deps.pushes)
     n = len(deps.pushes)
     tick(cfg, st, deps, D(22, 2))                       # repeated closing ticks
@@ -899,7 +899,7 @@ class _StubBms:
 
 
 class _StubAudit:
-    def __init__(self, path, **kw): self.events = []   # **kw: RealDeps wires cfg (§10b)
+    def __init__(self, path, **kw): self.events = []   # **kw: RealDeps wires cfg
     def record(self, event, **fields): self.events.append((event, fields))
 
 
@@ -932,7 +932,7 @@ def test_realdeps_collision_clear_disables_and_verifies_both_classes(make_deps):
         {"type": "repeat", "do": {"switch": "on"}, "enabled": 1, "atLocal": "0 4 * * *"},
         {"type": "repeat", "do": {"switch": "off"}, "enabled": 1, "atLocal": "0 6 * * 1"}]
     assert deps._collision_clear() is True
-    assert [t["enabled"] for t in deps.cloud.timers] == [0, 0]  # §12.2: BOTH classes disarmed
+    assert [t["enabled"] for t in deps.cloud.timers] == [0, 0]  # BOTH classes disarmed
     assert deps.audit_log.events[-1][0] == "act"
     fields = deps.audit_log.events[-1][1]
     assert fields["action"] == {"type": "disable_on_timers"}
@@ -981,7 +981,7 @@ def test_realdeps_collision_clear_verify_fails_on_lost_write(make_deps):
 
 
 def test_realdeps_collision_clear_verify_fails_on_armed_off_timer_lost_write(make_deps):
-    # §12.2 critical case: an armed OFF timer must NOT survive a lost write as "ok"
+    # critical case: an armed OFF timer must NOT survive a lost write as "ok"
     deps = make_deps()
     deps.cloud.timers = [{"type": "repeat", "do": {"switch": "off"}, "enabled": 1}]
     deps.cloud.ignore_writes = True                           # write accepted, device unchanged
@@ -1017,7 +1017,7 @@ def test_audit_whitelist_allows_inventory_and_timer_action(tmp_path):
     log.record("act", action={"type": "disable_on_timers"}, timer_action="disable",
                channel="cloud", result="ok")
     log.record("inventory", inventory=[{"type": "repeat", "do": {"switch": "on"}, "enabled": 0}])
-    log.record("push", kind="GRID ON", inputs={"text": "reason"})   # v4 §9.7 push audit
+    log.record("push", kind="GRID ON", inputs={"text": "reason"})   # push audit
     lines = (tmp_path / "gridguard.jsonl").read_text(encoding="utf-8").splitlines()
     assert len(lines) == 3 and "timer_action" in lines[0] and "inventory" in lines[1]
     assert '"kind": "GRID ON"' in lines[2]
@@ -1101,7 +1101,7 @@ def test_realdeps_night_buckets_failure_is_not_cached(make_deps):
     assert deps.bms.night_buckets_calls == 2                 # failed fetch retries
 
 
-# --- v4 §9.7: pushes are audited into the jsonl (fake audit sink, no network) ---
+# --- pushes are audited into the jsonl (fake audit sink, no network) ----------
 def test_realdeps_push_audits_event(make_deps):
     deps = make_deps()
     deps.push("GRID ON", "reason: night need not yet determinable")
@@ -1124,12 +1124,12 @@ def test_realdeps_push_audit_lands_even_when_ntfy_explodes(make_deps, monkeypatc
     assert [f for e, f in deps.audit_log.events if e == "push"][0]["kind"] == "GRID ON"
 
 
-# --- T3 §9.1 RealDeps.forecast_ok — ONE fetch, ALWAYS shipped, conservative ------
+# --- RealDeps.forecast_ok — ONE fetch, ALWAYS shipped, conservative ------------
 SUN_ENV = {"WEATHER_LAT": "36.7", "WEATHER_LON": "-4.4", "WEATHER_MIN_J": "8000000"}
 
 
 def _ship_spy(monkeypatch):
-    """Spy on ship_forecast (T2 §12.1) — records the shipped radiation values."""
+    """Spy on ship_forecast — records the shipped radiation values."""
     calls: list = []
     monkeypatch.setattr("gridguard.main.ship_forecast",
                         lambda c, r, **kw: calls.append(r))
@@ -1175,7 +1175,7 @@ def test_realdeps_forecast_ok_threshold_matrix_and_reasons(make_deps, monkeypatc
 
 
 def test_realdeps_forecast_ok_ship_failure_never_propagates(make_deps, monkeypatch):
-    # §12.1: ship errors must never propagate through the gate (ship_forecast
+    # ship errors must never propagate through the gate (ship_forecast
     # swallows internally; the invariant is enforced and pinned locally here)
     deps = make_deps(**SUN_ENV)
     deps.weather = SimpleNamespace(morning_radiation_j=lambda: 12e6)
@@ -1187,13 +1187,13 @@ def test_realdeps_forecast_ok_ship_failure_never_propagates(make_deps, monkeypat
     assert deps.forecast_ok() == (True, "radiation 12.0 MJ ≥ 8 MJ")   # Gate-Truth untouched
 
 
-# --- §13 R4: forecast-informed morning release — the rule in force is AUDITED ----
-# §13 v7 SUPERSEDED (the R4 gate era) — the release audit now carries ground="drain"
+# --- forecast-informed morning release — the rule in force is AUDITED ---------
+# SUPERSEDED (the R4 gate era) — the release audit now carries ground="drain"
 # + floor_ah (see test_morning_aus_audit_carries_drain_ground); soc_gate no longer exists.
 
 
 
-# §13 v7 SUPERSEDED — no weather-suppression branch exists; the day consults no
+# SUPERSEDED — no weather-suppression branch exists; the day consults no
 # forecast at all (forecast_calls == 0 pinned in test_v7_drain_is_unconditional...).
 
 def test_r4_pass_low_soc_releases_day_room():
@@ -1207,14 +1207,14 @@ def test_r4_pass_low_soc_releases_day_room():
     assert st.morning_done and deps.switch == "off"
 
 
-# v6 supersession (owner2026-10-21, purpose-argument): "FAIL beats SOC95" and
+# supersession (purpose-argument): "FAIL beats SOC95" and
 # "FAIL beats proven sun" are OVERTURNED — a near-full battery closing the sink is
 # the only irreversible loss. The truth now lives in
 # test_v6_sink_imperative_releases_at_high_soc_even_on_fail and
 # test_v6_proven_sun_beats_failed_gate_even_below_50.
 
 
-# §13 v7 SUPERSEDED — "no candidate" is gone: any battery above the safety floor
+# SUPERSEDED — "no candidate" is gone: any battery above the safety floor
 # drains into the load (test_v7_drain_is_unconditional_above_the_floor).
 
 def test_v7_drain_is_unconditional_above_the_floor():
@@ -1231,9 +1231,9 @@ def test_v7_drain_is_unconditional_above_the_floor():
 
 
 def test_day_drain_continues_past_counter_floor_and_stops_at_voltage_floor():
-    # L2 wave1 (owner ruling 2026-10-25, the 06:40 incident): the BMS counter
-    # must NEVER stop the day again — with healthy corrected cell voltage
-    # the drain keeps running even at a 2,0 Ah counter reading; and ONLY the
+    # the BMS counter must NEVER stop the day again — with healthy corrected
+    # cell voltage the drain keeps running even at a 2,0 Ah counter reading;
+    # and ONLY the
     # voltage floor (corrected ≤ TRUE_FLOOR_V) stops it.
     st = AppState(); st.night_over = True
     deps = FakeDeps(min_v=3.26, remaining_ah=2.0, switch="on",
@@ -1252,7 +1252,7 @@ def test_day_drain_continues_past_counter_floor_and_stops_at_voltage_floor():
 
 
 def test_v7_safety_floor_outranks_everything():
-    # L2 (owner2026-10-25): the floor is the corrected CELL VOLTAGE — even at
+    # the floor is the corrected CELL VOLTAGE — even at
     # SOC95 and a counter reading under the old ah_on: 3,14 V corrected ≤
     # TRUE_FLOOR_V → nothing to drain → HOLD (a physics invariant, not a tuning
     # value). The counter (4,0 Ah) plays no role anymore.
@@ -1274,7 +1274,7 @@ def test_v7_unknown_battery_holds_without_guessing():
     assert deps.acts == [] and deps.forecast_calls == 0
 
 
-# --- v7 observability (lesson2026-10-21): a blocked reach-gate must announce itself
+# --- observability: a blocked reach-gate must announce itself ------------------
 def test_reach_block_is_audited_once_not_silently():
     # reachable=False blocked a WHOLE morning with zero events — the awake block
     # must announce itself, transition-guarded (once per outage, not per tick)
@@ -1298,7 +1298,7 @@ def test_reach_restored_announces_and_the_drain_runs():
     assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_off"]  # drain ran
 
 
-# --- manual-override recognition (owner2026-10-21) -----------------------------
+# --- manual-override recognition ------------------------------------------------
 # The actor is WiFi-only; during WiFi-on hours a state change NO act of ours
 # caused = a hand on the switch. Recognized by comparing the just-read state
 # with the last observation; our own acts sync the baseline; after an
@@ -1358,7 +1358,7 @@ def test_override_gap_rebaselines_silently():
     assert not any(t == "MANUAL" for t, _x in deps.pushes)
 
 
-# --- state_observed journal (owner find 2026-10-22) --------------------------
+# --- state_observed journal ----------------------------------------------------
 # Device timers fire unlabelled while unreachable — the act-label windows then
 # lie (hero stayed OFF through 08:01→10:03 and "since" pointed at yesterday).
 # The journal: baseline on first read (no "from"), transition on every observed
@@ -1391,7 +1391,7 @@ def test_state_observed_journals_gap_change_without_manual_accusation():
     assert not any(t == "MANUAL" for t, _x in deps.pushes)
 
 
-# --- data quality assurance (owner voice 2026-10-22, binding) -----------------
+# --- data quality assurance (binding) ------------------------------------------
 # "9:53 can nothing switch, because the WLAN is off" — a read inside the known
 # WLAN-off window returns the device's LAST KNOWN state, never an actor
 # response. Such reads must not become data: no baseline, no transition, no
@@ -1421,7 +1421,7 @@ def test_unreachable_stale_reads_do_not_advance_the_gap_clock():
     # become the anchor: the flip detected live at 10:50 is 50 min after the
     # last ACTOR-GROUNDED observation → over the gap → silent re-baseline.
     # Without the QA the stale 10:10 read would anchor the gap at 40 min and
-    # accuse a hand — the exact wrong conclusion of 2026-10-22.
+    # accuse a hand — the exact wrong conclusion this guard prevents.
     st, deps = AppState(), FakeDeps(switch="off", soc_pct=80.0)
     tick(cfg, st, deps, D(10, 0))                    # live baseline off, clock t=10:00
     deps.reachable_flag = False                      # blackout: stale reads only
@@ -1433,12 +1433,12 @@ def test_unreachable_stale_reads_do_not_advance_the_gap_clock():
     assert not any(t == "MANUAL" for t, _x in deps.pushes)
 
 
-# --- deep-drain ruling (owner2026-10-22: safety → 1.0, maximum solar use) -----
+# --- deep-drain rule (safety → 1.0, maximum solar use) -------------------------
 # The ×1.2 used to ride in the crossing RATE: the return fired with ~29 % SOC
 # still in the pack (this morning's find). With the raw learned need the verdict
 # may FLIP rescue_timer → carries once the pack refilled — and the previously
 # armed return must then be DISARMED, else the stale timer still fires at the
-# old crossing and cuts the night short (exactly what the ruling removes).
+# old crossing and cuts the night short (exactly what this rule removes).
 
 def test_eve_carry_flip_disarms_the_armed_return():
     st = AppState()
@@ -1446,7 +1446,7 @@ def test_eve_carry_flip_disarms_the_armed_return():
                     buckets=NEED300)
     tick(cfg, st, deps, D(20, 10))
     assert st.rescue_timer_set and st.evening_verdict == "rescue_timer"
-    deps.remaining_ah = 100.0                            # the pack refilled (§20: the COUNTER)
+    deps.remaining_ah = 100.0                            # the pack refilled (the COUNTER)
     tick(cfg, st, deps, D(20, 20))
     assert st.evening_verdict == "safe_clear"            # carries the whole night
     assert "disable_on_timers" in [a[0] for a in deps.acts]   # stale timer disarmed
@@ -1469,7 +1469,7 @@ def test_eve_carry_flip_disarms_from_device_truth_after_restart():
     assert "disable_on_timers" in [a[0] for a in deps.acts]
 
 
-# --- crossing horizon = MEASURED solar night (owner: concept applied throughout) --
+# --- crossing horizon = MEASURED solar night (concept applied throughout) ------
 def test_eve_night_len_prefers_measured_solar_span():
     st = AppState()
     deps = FakeDeps(min_v=V400, remaining_ah=AH400, switch="off", inventory_timers=[],
@@ -1485,7 +1485,7 @@ def test_eve_night_len_prefers_measured_solar_span():
     assert at == expected
 
 
-# --- Owner2026-10-23: forecast_ok ships the storm outlook as a side branch ----
+# --- forecast_ok ships the storm outlook as a side branch ----------------------
 def test_realdeps_forecast_ok_ships_storm_outlook_alongside(make_deps, monkeypatch):
     deps = make_deps(**SUN_ENV)
     outlook: list = []
@@ -1502,7 +1502,7 @@ def test_realdeps_forecast_ok_ships_storm_outlook_alongside(make_deps, monkeypat
     assert len(outlook) == 1
 
 
-# --- Owner2026-10-23: forecast-revision outake (throttled, intake only) ------
+# --- forecast-revision outake (throttled, intake only) ------------------------
 def test_realdeps_forecast_refresh_throttles_and_ships_revisions(make_deps, monkeypatch):
     import gridguard.main as main_mod
     deps = make_deps(**SUN_ENV)
@@ -1537,7 +1537,7 @@ def test_realdeps_forecast_refresh_never_raises(make_deps, monkeypatch):
 
 
 def test_eve_survives_yield_learning_crash_and_still_decides():
-    """Defense2026-10-23 (tick_error series20:07+): yield_learning is a
+    """Defense (tick_error series): yield_learning is a
     pure side branch (v7: never gates) — ITS crash must never kill the eve
     decision (need audit + plan)."""
     st = AppState()
@@ -1550,10 +1550,10 @@ def test_eve_survives_yield_learning_crash_and_still_decides():
     assert deps.plan_seen                            # the plan came despite the crash
 
 
-# --- Owner2026-10-23 (TDD gap): decision-path resilience matrix ----------------
+# --- decision-path resilience matrix -------------------------------------------
 # NO single consult-side Deps call may kill the tick-/eve decision —
 # regardless of exception class (BmsError, RuntimeError AND the
-# data-shape classes like TypeError that escaped in the 20:07 series).
+# data-shape classes like TypeError that escaped in the error series).
 # Fallback = conservative + visible audit (never a dead loop).
 @pytest.mark.parametrize("crash", ["bms_latest", "bms_samples_2h", "night_profile",
                                    "night_buckets", "solar_night_windows",
@@ -1589,7 +1589,7 @@ def test_eve_repeated_apply_failure_pushes_no_channel_once_only():
     assert len(deps.plan_seen) == 2                      # every tick retries
 
 
-# --- owner2026-10-25: dynamic floors + no interference ------------------------
+# --- dynamic floors + no interference ------------------------------------------
 def test_capacity_ack_never_suppresses_the_deep_emergency_same_day():
     """Thresholds don't disturb each other: a low_capacity_ack no longer
     blocks the emergency on the same day (Ack = only its own action)."""
@@ -1603,8 +1603,8 @@ def test_capacity_ack_never_suppresses_the_deep_emergency_same_day():
                                          "disable_on_timers", "switch_on"]
     assert deps.pushes and deps.pushes[-1][0] == "EMERGENCY"
 
-# --- owner2026-10-25 (DYNAMIC ruling): no fixed outage config — the live link
-# is the only truth, and suppressed floors ACT THE INSTANT IT RETURNS ----------
+# --- no fixed outage config — the live link is the only truth, and suppressed
+# floors ACT THE INSTANT IT RETURNS ---------------------------------------------
 def test_floor_unreachable_never_dials_but_acts_the_instant_the_link_returns():
     """No fixed outage parameter (config doctrine: Env = no usage-
     dependent values). Without a path: no dialing, ONE audit/day (the latch
@@ -1641,8 +1641,8 @@ def test_deep_emergency_pushes_once_while_blind_but_never_dials():
     assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_on"]
 
 
-# --- owner ruling 2026-10-25 (part 3): weather-conditional RESERVE TIERS -------
-# Instrument carve-out (owner, binding): the tier gates compare BMS SOC
+# --- weather-conditional RESERVE TIERS -----------------------------------------
+# Instrument carve-out (binding): the tier gates compare BMS SOC
 # (reading.soc — the coulomb counter) because the LiFePO4 mid-band has no
 # voltage expression (~12 mV between 30 % and 50 %): display-only stays
 # BINDING for the deep/emergency decisions; BMS SOC is the correct instrument
@@ -1679,9 +1679,16 @@ def test_midday_forecast_revision_overwrites_the_reserve_tier_latch(make_deps,
     deps = make_deps(**{"WEATHER_INDEX": "0"})       # ships off → no HTTP in tests
     ticks = {"t": 5000.0}
     monkeypatch.setattr(main_mod._time, "monotonic", lambda: ticks["t"])
+    # the tier computation reads the outlook FROM THE CLUSTER (load_outlook)
+    # — the test serves the shipped copy the revision would have written
+    # (fetch X → ship X → cluster = X)
+    phase = {"days": [{"date": "2026-10-19", "weather_code": 95}]}
+    monkeypatch.setattr(
+        main_mod, "load_outlook",
+        lambda cfg, _search=None: (list(phase["days"]), "cluster-ts"))
     deps.weather = SimpleNamespace(
         morning_radiation_j=lambda: 12e6,
-        daily_outlook=lambda: [{"date": "2026-10-19", "weather_code": 95}])
+        daily_outlook=lambda: list(phase["days"]))
     st = AppState()
     deps.forecast_refresh(st)                        # revision path carries the latch
     assert st.reserve_tier_pct == 50
@@ -1691,11 +1698,9 @@ def test_midday_forecast_revision_overwrites_the_reserve_tier_latch(make_deps,
     # midday revision: the storm passed → the SAME computation overwrites the
     # latch and audits AGAIN (event name stable, the result may differ)
     ticks["t"] += deps.cfg.forecast_refresh_min * 60.0 + 1
-    deps.weather = SimpleNamespace(
-        morning_radiation_j=lambda: 12e6,
-        daily_outlook=lambda: [{"date": "2026-10-19", "weather_code": 3,
-                                "gust_max_kmh": 40.0, "precip_sum_mm": 0.0,
-                                "radiation_sum_j": 14e6}])
+    phase["days"] = [{"date": "2026-10-19", "weather_code": 3,
+                      "gust_max_kmh": 40.0, "precip_sum_mm": 0.0,
+                      "radiation_sum_j": 14e6}]
     deps.forecast_refresh(st)
     assert st.reserve_tier_pct == 0
     ev = [f for e, f in deps.audit_log.events if e == "reserve_tier"]
@@ -1724,7 +1729,7 @@ def test_release_gate_blocks_below_the_tier_with_one_guarded_tier_hold_line():
 
 
 def test_eve_release_night_holds_below_the_tier_with_a_single_tier_hold_line():
-    """Instrument split in action: the eve's available (counter × V_avg, §20)
+    """Instrument split in action: the eve's available (counter × V_avg)
     clears the ratio and the reserve band → the plan PROPOSES the spend, while
     the BMS SOC (28 < tier+hyst) gates the release — the day gate + eve gate
     share ONE guarded tier_hold line in the same tick (no double audit)."""
@@ -1761,7 +1766,7 @@ def test_drain_stops_at_the_tier_through_the_non_emergency_switch_on():
 
 
 def test_drain_stop_uses_the_forecast_day_not_the_latched_window():
-    """Owner DAY-OF-ACTION law 2026-11-14: the UPS drain-stop is active ONLY
+    """DAY-OF-ACTION law: the UPS drain-stop is active ONLY
     on the day the bad-weather forecast is FOR. A latch left from the window
     decision (the storm was YESTERDAY) must not stop TODAY's discharge —
     the same outlook with TODAY as the storm day still stops it."""
@@ -1825,7 +1830,7 @@ def test_next_eve_overwrites_the_reserve_tier_latch():
 
 
 def test_tier_stop_ignores_a_charging_pack_and_only_stops_a_real_discharge():
-    """REGRESSION (owner live-bug 2026-10-25 10:32): the pack charged at
+    """REGRESSION (live-bug): the pack charged at
     +13 A from solar (Ah climbing, SOC 11 <= tier 30) and the state-only stop
     still dialed switch_on with 'tier reached' — the design says the DISCHARGE
     stops at the tier, so a charging/flat pack must never trigger it."""
@@ -1842,12 +1847,12 @@ def test_tier_stop_ignores_a_charging_pack_and_only_stops_a_real_discharge():
     assert g and g[0]["inputs"]["ground"] == "tier" and g[0]["inputs"]["soc"] == 11.0
 
 
-# --- restart-window safety (owner incident 2026-10-25 09:37:39 UTC) -------------
+# --- restart-window safety ------------------------------------------------------
 # A deploy restarted the addon: AppState is in-memory, st.reserve_tier_pct
 # back to 0 — the FIRST tick after that evaluated the release gate with tier=0
 # (open) and issued a day-drain release (09:37:39 act disable_on_timers +
 # switch_off, grid_off inputs {soc: 12, ground: "drain"}) while the
-# owner-ordered reserve tier was 30 %. Six seconds later the forecast refresh
+# intended reserve tier was 30 %. Six seconds later the forecast refresh
 # re-latched the tier (09:37:45 reserve_tier {tier_pct: 30}). The
 # decision IS durable in the events index — only the latch forgets it on
 # every restart. Fix: the seed reloads the newest reserve_tier decision
@@ -1902,7 +1907,7 @@ def test_restart_seed_reload_ignores_negative_or_garbage_tier_values():
 
 
 def test_restart_seeded_tier_holds_the_release_on_the_first_tick_after_restart():
-    """INTEGRATION PIN of the incident: seeded from the {tier_pct: 30} event,
+    """INTEGRATION PIN of the restart hole: seeded from the {tier_pct: 30} event,
     then the tick that WITHOUT the latch would fire the drain release (soc 20 <
     release_at 35 = tier + hyst 5, switch ON) — the seeded hold applies on
     tick 1 after restart: no switch_off, ONE tier_hold line."""
@@ -1920,9 +1925,9 @@ def test_restart_seeded_tier_holds_the_release_on_the_first_tick_after_restart()
 
 
 def test_restart_before_seed_opened_the_release_window():
-    """THE OLD HOLE, documented (incident 2026-10-25 09:37:39 UTC): the same
+    """THE OLD HOLE, documented: the same
     tick fixture WITHOUT the seed — fresh AppState, latch 0 — lets the drain
-    release through (soc 20 far below the owner-ordered tier 30): exactly
+    release through (soc 20 far below the intended tier 30): exactly
     the window the seed closes."""
     st = AppState()                                     # restart without seed: tier=0
     deps = FakeDeps(remaining_ah=60.0, soc_pct=20.0, switch="on", solar_window=[])
@@ -1930,7 +1935,7 @@ def test_restart_before_seed_opened_the_release_window():
     assert [a[0] for a in deps.acts] == ["disable_on_timers", "switch_off"]
     off = [f for e, f in deps.audits if e == "grid_off"]
     assert off and off[0]["inputs"]["ground"] == "drain" \
-        and off[0]["inputs"]["soc"] == 20.0             # the incident: the drain ran
+        and off[0]["inputs"]["soc"] == 20.0             # the hole: the drain ran
 
 
 def test_run_seeds_the_reserve_tier_before_the_first_decision_tick(monkeypatch):
@@ -1961,17 +1966,17 @@ def test_run_seeds_the_reserve_tier_before_the_first_decision_tick(monkeypatch):
     assert seen == {"seed": 1, "tick_pct": 30}          # seeded BEFORE any tick
 
 
-# --- owner bug wave 2026-11-10 (20:07 incident): the tier's drain-stop must be REAL --
-# Incident: SOC 25 % under an active tier 30 %, the eve decided bring_on_now and the
+# --- the tier's drain-stop must be REAL ----------------------------------------
+# Failure shape: SOC 25 % under an active tier 30 %, the eve decided bring_on_now and the
 # suppression vetoed it ("grid stays off") while the tick-path drain-stop never fired
 # either (wlan dongle down) — no switch, no timer, battery heading for empty before
 # sunrise (685 Wh left, reference need 790 Wh). Four root causes, four pins.
 
 def test_tier_stop_acts_even_without_actor_reach():
-    """F3: the drain-stop's act path is CLOUD-first (RealDeps.act: cloud.set_switch
+    """The drain-stop's act path is CLOUD-first (RealDeps.act: cloud.set_switch
     -> LAN fallback -> honest NO CHANNEL / verify audits) — the wlan operstate gate
-    only blocked a viable cloud act (incident: dongle wlx… down, SOC 24 <= tier 30,
-    zero grid_on events all evening)."""
+    only blocked a viable cloud act (the observed case: dongle wlx… down,
+    SOC 24 <= tier 30, zero grid_on events all evening)."""
     st = AppState(); st.reserve_tier_pct = 30
     deps = FakeDeps(min_v=3.30, soc_pct=24.0, charge=-9.0, switch="off",
                     inventory_timers=[], reachable_flag=False, buckets=[])
@@ -1984,10 +1989,10 @@ def test_tier_stop_acts_even_without_actor_reach():
 
 
 def test_eve_bring_on_not_suppressed_below_a_held_tier():
-    """F1: the anti-oscillation veto may only stand while the drain rule could
+    """The anti-oscillation veto may only stand while the drain rule could
     actually revert this ON THIS tick (contact + tier release gate open). Below a
     held tier the release is gated (_tier_release_ok False) -> no fight -> the
-    eve's legitimate ON must execute (incident fixture: tier 30, SOC 24,
+    eve's legitimate ON must execute (fixture: tier 30, SOC 24,
     morning_done True, charge flat so the tick-stop is isolated out)."""
     st = AppState(); st.morning_done = True; st.reserve_tier_pct = 30
     deps = FakeDeps(min_v=3.30, soc_pct=24.0, charge=0.0, switch="off",
@@ -1999,10 +2004,10 @@ def test_eve_bring_on_not_suppressed_below_a_held_tier():
 
 
 def test_eve_bring_on_failure_arms_the_device_timer_insurance():
-    """F4: an eve ON decision that could not be executed must never leave the
-    night bare (the incident's shape: vetoed -> NOTHING at all). The direct act
-    failing now arms the DEVICE-side timer (the §31 blackout insurance — fires
-    without WiFi) with the §27 truth fields, while the NO CHANNEL signal for the
+    """An eve ON decision that could not be executed must never leave the
+    night bare (the failure shape: vetoed -> NOTHING at all). The direct act
+    failing now arms the DEVICE-side timer (the blackout insurance — fires
+    without WiFi) with the final truth fields, while the NO CHANNEL signal for the
     failed direct attempt stays honest."""
     st = AppState(); st.morning_done = True; st.reserve_tier_pct = 30
     deps = FakeDeps(min_v=3.30, soc_pct=24.0, charge=0.0, switch="off",
@@ -2017,8 +2022,8 @@ def test_eve_bring_on_failure_arms_the_device_timer_insurance():
 
 
 def test_reach_blocked_announces_while_the_grid_is_off():
-    """F5: the reach latch was gated to switch=="on" — an uplink outage while the
-    grid stayed OFF announced NOTHING (the incident's diagnosis gap: the dongle
+    """The reach latch was gated to switch=="on" — an uplink outage while the
+    grid stayed OFF announced NOTHING (the diagnosis gap: the dongle
     died during the drain and no reach_blocked existed to explain the silent
     tier-stop). The transition must announce regardless of the switch state."""
     st = AppState()
@@ -2029,3 +2034,51 @@ def test_reach_blocked_announces_while_the_grid_is_off():
     rb = [f for e, f in deps.audits if e == "reach_blocked"]
     assert rb and rb[0]["inputs"] == {"switch": "off"}          # ONCE, grid off too
     assert not [e for e, _ in deps.audits if e == "reach_restored"]
+
+
+def test_the_cluster_is_the_truth_layer_cycle_and_no_outlook_shadow():
+    """The cluster is the truth layer. WRITE side: run() cycles the weather
+    ship after every tick in all phases, self-throttled to a sensible cadence
+    (≤ 2 h), each cycle overwriting the local-day outlook doc (rolling
+    latest). READ side: every consumer reads the cluster copy (load_outlook);
+    the in-memory outlook hand-off stays gone."""
+    import inspect
+    import gridguard.main as main_mod
+    from gridguard.config import load_config
+    src = inspect.getsource(main_mod)
+    run_src = inspect.getsource(main_mod.run)
+    # write cycle: every loop iteration, after the tick, every phase
+    assert "deps.forecast_refresh(st)" in run_src
+    assert run_src.index("tick(cfg, st, deps, now") < \
+        run_src.index("deps.forecast_refresh(st)")
+    # sensible timing: the cycle stays within the 2 h example
+    assert load_config(GOOD).forecast_refresh_min <= 120.0
+    # read side: cluster direct; the shadow state may never resurrect
+    # (comment lines excluded — the doctrine comment NAMES the removed state)
+    code = "\n".join(l for l in src.splitlines()
+                     if not l.lstrip().startswith("#"))
+    assert "return load_outlook(self.cfg)" in code
+    assert "_set_outlook" not in code
+    assert "self._outlook" not in code
+
+
+def test_redeploys_are_safe_because_persistent_state_is_read_fresh():
+    """A redeploy must never be a problem for the backend logic: the cluster
+    is the persistence layer and everything persistent is read fresh at every
+    start. The startup seam restores the durable decisions from the cluster
+    before the first tick, and a post-midnight restart lands in Phase.MORNING
+    (night_over reseeded) — the NIGHT-only timer path is structurally
+    unreachable after a post-midnight redeploy."""
+    import inspect
+    from datetime import datetime
+    import gridguard.main as main_mod
+    from gridguard.config import load_config
+    from gridguard.main import Phase, current_phase
+    run_src = inspect.getsource(main_mod.run)
+    i_seed1 = run_src.index("restore_reserve_tier(st, deps)")
+    i_seed2 = run_src.index("restore_phase_flags(st, deps")
+    i_loop = run_src.index("while True:")
+    assert i_seed1 < i_loop and i_seed2 < i_loop   # both seeds precede the first tick
+    cfg = load_config(GOOD)
+    assert current_phase(datetime(2026, 11, 16, 0, 55), cfg,
+                         False, True) is Phase.MORNING

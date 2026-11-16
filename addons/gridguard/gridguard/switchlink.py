@@ -1,4 +1,4 @@
-"""eWeLink channels: encrypted LAN zeroconf + cloud API. See spec Appendix A."""
+"""eWeLink channels: encrypted LAN zeroconf + cloud API."""
 from __future__ import annotations
 
 import base64
@@ -78,7 +78,7 @@ def _http_json(url: str, data: dict | None = None, headers: dict | None = None,
     body = json.dumps(data).encode() if data is not None else None
     hdrs = dict(headers or {})
     if data is not None:
-        # Task1 spike finding: CoolKit answers 400 without this header on JSON bodies
+        # CoolKit answers 400 without this header on JSON bodies
         hdrs.setdefault("Content-Type", "application/json")
     req = urllib.request.Request(url, data=body, headers=hdrs)
     try:
@@ -91,7 +91,7 @@ def _http_json(url: str, data: dict | None = None, headers: dict | None = None,
 
 
 class LanClient:
-    """POST http://ip:8081/zeroconf/<command>, encrypted. Pacing + retries per spec Appendix A."""
+    """POST http://ip:8081/zeroconf/<command>, encrypted. Pacing + retries."""
 
     def __init__(self, ip: str, deviceid: str, devicekey: str, timeout: float = 6.0):
         self.ip, self.deviceid, self.devicekey, self.timeout = ip, deviceid, devicekey, timeout
@@ -143,7 +143,7 @@ class LanClient:
 
 
 class CloudClient:
-    """CoolKit v2 (official) — login, device read, switch write, timers (per spike finding)."""
+    """CoolKit v2 (official) — login, device read, switch write, timers."""
 
     def __init__(self, email: str, password: str, cc: str, timer_api_supported: bool = True):
         self.email, self.password, self.cc = email, password, cc
@@ -181,7 +181,7 @@ class CloudClient:
             or "access token" in str(resp.get("msg", "")).lower()
 
     def _request_with_reauth(self, url: str, data: dict | None = None) -> dict:
-        """Hotfix: access tokens die (TTL ~5h, live 2026-10-18). On an auth-ish
+        """Access tokens die (TTL ~5h). On an auth-ish
         failure discard the token, log in ONCE, retry the request EXACTLY once;
         a failing retry falls through to the caller's normal error handling."""
         resp = _http_json(url, data=data, headers=self._headers)
@@ -211,7 +211,7 @@ class CloudClient:
 
     def set_timers(self, deviceid: str, timers: list) -> dict:
         if not self.timer_api_supported:
-            raise ChannelError("timer-api-unsupported (phase-0 spike finding)")
+            raise ChannelError("timer-api-unsupported")
         return self._status(deviceid, {"timers": timers})
 
     def _status(self, deviceid: str, params: dict) -> dict:
@@ -223,8 +223,8 @@ class CloudClient:
 
 
 def deactivate_grid_timers(timers: list[dict]) -> list[dict]:
-    """§12.2 actuator discipline: BOTH timer classes are disabled
-    (enabled:0), never deleted; input unchanged. Owner matrix:
+    """Actuator discipline: BOTH timer classes are disabled
+    (enabled:0), never deleted; input unchanged. Transition matrix:
     ON→ON harmless, ON→OFF minor, OFF→ON CRITICAL CASE (night grid drop),
     OFF→OFF harmless — therefore: every armed timer is disarmed."""
     return [{**t, "enabled": 0} for t in timers]

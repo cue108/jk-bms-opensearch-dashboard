@@ -1,6 +1,6 @@
-"""solar_day_bounds — the ONE current curve decides the solar day boundary.
-(owner2026-10-21: no grid gating, no invented window; a day that never lifts
-above the threshold has NO solar day.)
+"""solar_day_bounds — the ONE current curve decides the solar day boundary:
+no grid gating, no invented window; a day that never lifts above the threshold
+has NO solar day.
 """
 from datetime import datetime, timedelta
 
@@ -9,7 +9,7 @@ from gridguard.periods import solar_day_bounds
 def _t(h, m):
     return datetime(2026, 10, 21, h, m)
 
-# Reference curve (host50 live, 2026-10-21):
+# Reference curve (host50 live):
 # charge ~+10…+25A from13:21 to~17:44, fall to ~-12A (discharge), then a FLAT
 # ZERO across the whole night (22:08–06:53), rise again from~09:03.
 CURVE = [
@@ -62,7 +62,7 @@ def test_sunset_none_defaults_to_end_of_day():
     assert end == _t(23, 59)  # default sunset covers the whole day
 
 
-# --- solar-night windows (owner ruling2026-10-22: concept applied throughout) --
+# --- solar-night windows (the concept applied throughout) ----------------------
 from datetime import datetime as _dt
 from gridguard.periods import night_windows
 

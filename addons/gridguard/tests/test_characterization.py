@@ -1,8 +1,8 @@
-"""Byte-equality oracle for the verbatim move (investigation §8 risk #1).
-Golden files are captured ONCE (DSH_CAPTURE=1) against the CURRENT code and
-committed; every later run asserts byte-equality. Pre-move the impl is
-`server` (repo frontend/); post-move it prefers gridguard.web_payload /
-gridguard.web_page — the SAME file, so the flip itself is the proof."""
+"""Byte-equality oracle for the verbatim move (the risk that the relocated
+implementation drifts). Golden files are captured ONCE (DSH_CAPTURE=1) against
+the CURRENT code and committed; every later run asserts byte-equality. Pre-move
+the impl is `server` (repo frontend/); post-move it prefers gridguard.web_payload
+/ gridguard.web_page — the SAME file, so the flip itself is the proof."""
 import importlib, json, os, sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path

@@ -1,25 +1,23 @@
-"""Owner PHYSICS ruling 2026-10-26 (§19 + §20 refinement) — eve available is
-amp-hour based, never the mid-range voltage snapshot.
+"""Eve available is amp-hour based, never the mid-range voltage snapshot.
 
-THE INCIDENT (handoff §18, live 2026-10-26): the first fully-truthful eve wrote
-10 programmings in 45 min with ZERO convergence (fire ladder 04:57/07:27/04:21/
-03:29/05:25/05:59/05:13/06:41/03:43/03:10). Root cause: available_wh was a
-per-run SNAPSHOT of the corrected-voltage SOC — a cycling compressor night load
-sagged min_cell 3.269 vs 3.315 rested (46 mV), the LiFePO4 plateau turned that
-into a huge sampled-SOC swing → ~0.9 kWh available-swing → at the ~200 W
-modeled rate hours of crossing chaos. The two-learners disagreement was live
-too: available_bms 1082 Wh vs voltage 925 Wh (157 Wh).
+WHY (the failure this pins): with a per-run SNAPSHOT of the corrected-voltage
+SOC as available_wh, a cycling compressor night load sagged min_cell 3.269 vs
+3.315 rested (46 mV); the LiFePO4 plateau turned that into a huge sampled-SOC
+swing → ~0.9 kWh available-swing → at the ~200 W modeled rate hours of crossing
+chaos (10 programmings in 45 min with ZERO convergence: fire ladder
+04:57/07:27/04:21/03:29/05:25/05:59/05:13/06:41/03:43/03:10). The two-learners
+disagreement was live too: available_bms 1082 Wh vs voltage 925 Wh (157 Wh).
 
-THE RULING (§19, refined §20): available = the BMS counter (remaining_ah — the
+THE RULE: available = the BMS counter (remaining_ah — the
 BMS's own internal amp-integration, restart-proof by construction) × V_avg, a
 cheap voltage AVERAGE for the Wh conversion only. The corrected-voltage SOC
 path is REMOVED from the eve's mid-range available; voltage keeps ONLY its
 designed home — the deep/knee band (floor_wh + emergency/ah_tief, byte-
 untouched, regression-pinned here) which is also the safety net for the
-deliberate below-counter discharge strategy (§20: we WILL drive the pack below
+deliberate below-counter discharge strategy (we WILL drive the pack below
 the BMS-reported Ah to force its AH learning; the knee/deep machinery guards).
 Plus the write DEADBAND: reprogram only on > 20 min crossing movement
-(WRITE_DEADBAND_MIN, owner-approved 2026-10-26).
+(WRITE_DEADBAND_MIN).
 """
 from datetime import datetime, timedelta
 
@@ -31,7 +29,7 @@ from gridguard.verdict import deep_floor_hit, voltage_floor_hit
 from test_main_tick import D, FULL_AH, NEED300, PACK_V, FakeDeps, buckets
 from gridguard.main import AppState, tick
 
-# --- real incident constants (handoff §18 / brief) -----------------------------
+# --- the observed constants from the live audit run ----------------------------
 NEED_WH = 2428.35                       # learned CLEAN-median night need (live)
 LADDER = ["04:57", "07:27", "04:21", "03:29", "05:25",      # the 10 writes of
           "05:59", "05:13", "06:41", "03:43", "03:10"]      # 19:46Z..20:31Z
@@ -39,12 +37,12 @@ AVAIL_V_SNAP = 925.0                    # voltage-model available (live audit)
 AVAIL_BMS = 1082.0                      # counter line (live audit, 157 Wh off)
 SAG_LOADED_V = 3.269                    # min cell under the compressor load
 SAG_RESTED_V = 3.315                    # … vs the rested/corrected value (46 mV)
-PACK_V_REAL = 13.064                    # the real 4S pack voltage (observer §4)
+PACK_V_REAL = 13.064                    # the real 4S pack voltage
 RATE_W = NEED_WH / 11.0                 # modeled rate: safety 1.0 × need ÷ 11 h
-                                         # ≈ 220.8 W („~200 W" in the ruling)
+                                         # ≈ 220.8 W ("~200 W" was the target)
 
-# incident cfg: host .env truth (SAFETY_FACTOR=1.0), the fixture uses the real
-# pack voltage — the incident numbers must run on the incident arithmetic
+# fixture cfg: host .env truth (SAFETY_FACTOR=1.0), the fixture uses the real
+# pack voltage — the observed numbers must run on their own arithmetic
 INC = {"TZ": "Europe/Madrid", "WINDOW_START": "09:00", "WINDOW_END": "22:00",
        "EVE_START": "20:00", "SAFETY_FACTOR": "1.0",
        "OPENSEARCH_URL": "http://x", "BMS_INDEX": "i", "EWCLOUD_EMAIL": "a",
@@ -65,22 +63,22 @@ def _crossing(available_wh: float, now: datetime, night_len: float = 11.0,
               need: float = NEED_WH, safety: float = 1.0,
               floor_wh: float = FLOOR_WH_INC) -> datetime:
     """The removed planner crossing math, mirrored (t_fire = now + head/rate) —
-    used to REPRODUCE the incident from the observed numbers, never as logic."""
+    used to REPRODUCE the failure from the observed numbers, never as logic."""
     rate = need * safety / max(1.0, night_len)
     return now + timedelta(hours=max(0.0, available_wh - floor_wh) / rate)
 
 
-# --- (fixture truth) the real incident pins ------------------------------------
+# --- (fixture truth) the observed pins -----------------------------------------
 def test_incident_ladder_and_sag_numbers_are_pinned():
-    """The red fixture IS tonight's incident — these constants come from the
+    """The red fixture IS the observed failure — these constants come from the
     live audit trail, not from invented test data."""
     spread = max(map(_minutes, LADDER)) - min(map(_minutes, LADDER))
     assert spread == 257                       # 03:10 → 07:27 = 4 h 17 min
     assert len(LADDER) == 10                   # 10 writes in 45 min, zero convergence
     assert round(SAG_RESTED_V - SAG_LOADED_V, 3) == 0.046   # the 46 mV sag pair
     assert round(AVAIL_BMS - AVAIL_V_SNAP, 1) == 157.0      # two-learners live
-    assert WRITE_DEADBAND_MIN == 20            # owner-approved 2026-10-26
-    # the incident spread dwarfs the deadband by an order of magnitude
+    assert WRITE_DEADBAND_MIN == 20            # the deadband constant
+    # the ladder spread dwarfs the deadband by an order of magnitude
     assert spread > 10 * WRITE_DEADBAND_MIN
 
 
@@ -103,7 +101,7 @@ def test_removed_voltage_path_bounces_the_crossing_by_hours():
 
 # --- (a) THE RED: load cycle → monotone available, crossing inside deadband ----
 def test_load_cycle_available_monotone_and_crossing_converges():
-    """Synthetic compressor duty on the incident fixture: current alternates
+    """Synthetic compressor duty on the observed fixture: current alternates
     0 / −9 A on a 5-min grid, min cell sags 3.315 ↔ 3.269 (46 mV), the counter
     integrates the amps (−0.75 Ah per loaded 5 min). The eve ticks every 5 min
     over the observed 45-min ladder window (10 ticks). NEW truth: available =
@@ -141,7 +139,7 @@ def test_load_cycle_available_monotone_and_crossing_converges():
     moves = [(abs((b - a).total_seconds()) / 60.0)
              for a, b in zip(crossings, crossings[1:])]
     assert max(moves) <= WRITE_DEADBAND_MIN
-    # … and over the whole ladder window (the incident drifted hours)
+    # … and over the whole ladder window (the old path drifted hours)
     assert abs((crossings[-1] - crossings[0]).total_seconds()) / 60.0 \
         <= 35.0
     # OLD path on the SAME fixture: hours of crossing chaos (the red evidence)
@@ -150,7 +148,7 @@ def test_load_cycle_available_monotone_and_crossing_converges():
 
 
 def test_the_sag_itself_never_moves_available_at_a_fixed_counter():
-    """The incident in one line: identical counter, only the voltage sagging —
+    """The failure in one line: identical counter, only the voltage sagging —
     available must not twitch (the removed path swung ~0.68 kWh on this pair)."""
     st = AppState(); st.morning_done = True
     deps = FakeDeps(min_v=SAG_RESTED_V, charge=0.0, remaining_ah=82.83,
@@ -164,7 +162,7 @@ def test_the_sag_itself_never_moves_available_at_a_fixed_counter():
     assert a_rest == a_sag == 82.83 * 13.05                # counter × V_avg, exact
 
 
-# --- (b) the Ah-anchor math (§20: the counter IS the anchor) — exact numbers ----
+# --- (b) the Ah-anchor math (the counter IS the anchor) — exact numbers --------
 def test_available_is_counter_times_voltage_average_exact_numbers():
     st = AppState(); st.morning_done = True
     deps = FakeDeps(min_v=3.30, charge=0.0, remaining_ah=12.0, switch="off",
@@ -181,7 +179,7 @@ def test_available_is_counter_times_voltage_average_exact_numbers():
     assert night["remaining_ah"] == 12.0                    # the anchor, disclosed
     assert night["v_avg"] == 13.05                          # the conversion average
     assert night["available_bms_wh"] == pytest.approx(12.0 * PACK_V_REAL)
-    # the crossing runs on EXACTLY this available — owner floor law 2026-11-13:
+    # the crossing runs on EXACTLY this available — floor law:
     # OUTSIDE the UPS mode there is NO floor ("the physics IS the floor at
     # 0 Wh or 0 % SOC") → head = the raw BMS remaining.
     rate = 300.0 * 1.2 / 11.0
@@ -228,7 +226,7 @@ def test_v_avg_query_failure_falls_back_to_the_live_pack_voltage():
     assert night["available_wh"] == 50.0 * PACK_V_REAL       # live pack_v fallback
 
 
-# --- (e) restart-mid-eve: the counter carries the anchor (§20) -----------------
+# --- (e) restart-mid-eve: the counter carries the anchor -----------------------
 def test_restart_mid_eve_available_continues_from_the_counter_alone():
     """With the counter as the anchor there is NO in-memory anchor state to
     lose: a container restart mid-eve re-reads the counter and the available
@@ -255,7 +253,7 @@ def test_restart_mid_eve_available_continues_from_the_counter_alone():
         == 80.0 * PACK_V                                   # identical instrument
 
 
-# --- relearn conservatism (§19/§20): the counter speaks, the knee guards -------
+# --- relearn conservatism: the counter speaks, the knee guards -----------------
 def test_zero_counter_is_conservative_never_a_voltage_guess():
     """Relearn/reset artifact (observer order #2): remaining_ah = 0 is a RESET,
     not emptiness — available 0 makes the ratio conservatively NOT ok (the
@@ -283,10 +281,10 @@ def test_zero_counter_is_conservative_never_a_voltage_guess():
                                  "NTFY_WEBHOOK": "https://n/t"})) is False
 
 
-# --- (d) deep-floor + emergency/ah_tief byte-regression pins (§19/§20) ---------
+# --- deep-floor + emergency/ah_tief byte-regression pins -----------------------
 # Voltage keeps ONLY its designed home: the deep/knee band — the floors and the
 # emergency machinery are the SAFETY NET beneath the counter instrument (the
-# deliberate below-counter discharge strategy, §20, drives into exactly this
+# deliberate below-counter discharge strategy, drives into exactly this
 # band). These pins are BYTE-faithful to the pre-wave behavior.
 def test_deep_emergency_byte_regression_pin():
     st, deps = AppState(), FakeDeps(min_v=2.89, switch="off")
@@ -323,9 +321,10 @@ def test_low_capacity_ah_tief_byte_regression_pin():
 
 
 def test_knee_floor_catches_a_lying_high_counter():
-    """The §19 pairing in action: the knee floor remains the SAFETY NET for a
-    bad relearn anchor — a counter lying HIGH (100 Ah) cannot hold the pack in
-    the deep band; the corrected cell voltage decides, the counter is disclosed."""
+    """The floor/knee pairing in action: the knee floor remains the SAFETY NET
+    for a bad relearn anchor — a counter lying HIGH (100 Ah) cannot hold the
+    pack in the deep band; the corrected cell voltage decides, the counter is
+    disclosed."""
     st, deps = AppState(), FakeDeps(min_v=3.14, remaining_ah=100.0, switch="off")
     tick(load_config({"TZ": "Europe/Madrid", "SAFETY_FACTOR": "1.2",
                       "OPENSEARCH_URL": "http://x", "BMS_INDEX": "i",
@@ -339,8 +338,8 @@ def test_knee_floor_catches_a_lying_high_counter():
 
 
 def test_voltage_floor_truth_table_untouched():
-    """The floor functions are byte-untouched by this wave — pin the ruling
-    boundaries (§19: voltage keeps ONLY the deep/knee band)."""
+    """The floor functions are byte-untouched by this change — pin the
+    boundaries (voltage keeps ONLY the deep/knee band)."""
     c = load_config({"TZ": "Europe/Madrid", "SAFETY_FACTOR": "1.2",
                      "OPENSEARCH_URL": "http://x", "BMS_INDEX": "i",
                      "EWCLOUD_EMAIL": "a", "EWCLOUD_PASS": "b",
@@ -357,8 +356,8 @@ def test_voltage_floor_truth_table_untouched():
     assert voltage_floor_hit(3.114, -7.0, c) is True   # 3.114 + 35 mV = 3.149 ≤ 3.15
 
 
-# --- owner ruling family 2026-10-26 (§23 → WITHDRAWN in §24) ------------------
-# The within-night realized-drain rate adoption was REJECTED by the owner: an
+# --- withdrawn candidate: within-night realized-drain rate adoption ------------
+# The within-night realized-drain rate adoption was REJECTED: an
 # in-night span-average is biased by WHERE in the load shape it samples. The
 # prediction method stays: LEARNED whole-night energy ÷ night length = the
 # mean rate ("NOTHING SHOULD CHANGE HERE"); the honest rate correction
@@ -368,28 +367,40 @@ A0_WH = 1560.0                         # dusk available (counter × V_avg) fixtu
 
 
 def test_tier_zero_keeps_no_hidden_reserve_and_a_tier_raises_the_floor():
-    """PROVE-ONLY (existing behavior, §23/§24): reserve tier 0 → the planner
-    receives NO floor at all (owner floor law 2026-11-13: outside the UPS
-    mode there is no band — the physics at 0 % SOC is the floor); a latched
-    tier > 0 raises the floor through the EXISTING path (planner-pinned).
-    Zero code change."""
-    # tier 0: the crossing uses the RAW remaining (no floor outside the UPS) …
+    """PROVE-ONLY: the planner's floor comes from the cluster day-view
+    (outlook_days), never the window latch — day-view tier 0 → NO floor at
+    all (outside the UPS mode there is no band; the physics at 0 % SOC is
+    the floor); a day-view tier > 0 raises the floor through the existing
+    planner path. A stale 50 % latch beside a 30 % day-view must not change
+    the result (regression pin)."""
+    tier_cfg = load_config({**INC, "WEATHER_MIN_J": "8000000"})  # tier-1 ref
+
+    def _days(rad):        # the cluster copy for D()'s pinned eve day
+        return ([{"date": "2026-10-18", "weather_code": 3,
+                  "radiation_sum_j": rad},
+                 {"date": "2026-10-19", "weather_code": 3,
+                  "radiation_sum_j": rad}], "cluster-ts")
+
+    # tier 0 in the day-view: the crossing uses the RAW remaining …
     st = AppState(); st.morning_done = True; st.reserve_tier_pct = 0
     deps = FakeDeps(min_v=3.30, remaining_ah=A0_WH / 13.05, switch="off",
                     inventory_timers=[], buckets=NEED2428,
                     pack_v=PACK_V_REAL, v_avg=13.05)
-    tick(inc_cfg, st, deps, D(20, 0))
+    deps.outlook_days = lambda: _days(14e6)      # ≥ ref 8 MJ → tier 0
+    tick(tier_cfg, st, deps, D(20, 0))
     at0 = deps.plan_seen[-1][1][0][1]["at_local"]
     assert (at0 - D(20, 0)).total_seconds() == pytest.approx(
         A0_WH / (NEED_WH / 11.0) * 3600.0, abs=1e-3)      # no floor: raw head
-    # … and a latched 30 % tier raises the floor via the existing path: the
-    # head above the raised band shrinks → the crossing moves EARLIER (toward
-    # the band), never deeper than the reserve.
-    st2 = AppState(); st2.morning_done = True; st2.reserve_tier_pct = 30
+    # … and a 30 % day-view raises the floor via the existing path: the head
+    # above the raised band shrinks → the crossing moves EARLIER (toward the
+    # band), never deeper than the reserve — with a stale 50 % window latch
+    # beside it (the latch is no timer input).
+    st2 = AppState(); st2.morning_done = True; st2.reserve_tier_pct = 50
     deps2 = FakeDeps(min_v=3.30, remaining_ah=A0_WH / 13.05, switch="off",
                      inventory_timers=[], buckets=NEED2428,
                      pack_v=PACK_V_REAL, v_avg=13.05)
-    tick(inc_cfg, st2, deps2, D(20, 0))
+    deps2.outlook_days = lambda: _days(4e6)      # < ref 8 MJ → tier 30
+    tick(tier_cfg, st2, deps2, D(20, 0))
     at30 = deps2.plan_seen[-1][1][0][1]["at_local"]
     tier_floor = 0.30 * FULL_AH * PACK_V_REAL              # 30 % band × capacity × V
     assert (at30 - D(20, 0)).total_seconds() == pytest.approx(

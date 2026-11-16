@@ -1,19 +1,20 @@
-"""v4 evening ratio planner (spec v4 §3/§6) — pure; execution lives in main.
+"""Pure evening ratio planner — execution lives in main.
 
-The ONE evening decision (§2/§3): `available >= SAFETY_FACTOR × need`, where
+The ONE evening decision: `available >= SAFETY_FACTOR × need`, where
 `need` is the median Wh of the CLEAN night buckets (learn.night_need_wh) and
 `available` is the remaining pack energy in Wh. Conservative by construction:
 None on either side = not-ok (keep/bring the grid on) — the None-under-2-CLEAN
-default is the standing answer while the §9.1 ratio ↔ R2' grid-off-gate interlock
-stays OPEN (only the SUN part of §9.1 is ruled — see the AND-gate below).
+default is the standing answer while the ratio ↔ grid-off-gate interlock
+stays undecided (only the sun part of the release gate is settled — see the
+AND-gate below).
 
-t_fire is demoted from decision core to FAILSAFE TIMER (spec §8): on a green
+t_fire is demoted from decision core to FAILSAFE TIMER: on a green
 ratio with the switch still OFF, an ON timer is programmed at the moment the
 learned drain strikes the floor — only when that crossing lies INSIDE the
-learned night. No forecast anywhere IN the ratio (controller ruling
-2026-10-19); §9.1 (owner rule "release only with sun") adds the sun gate as
-a SEPARATE AND-condition: `ok = ratio_ok AND forecast_ok` (default False =
-conservative — the fetch/ship lives in main.RealDeps.forecast_ok, never here).
+learned night. No forecast anywhere IN the ratio; the release-only-with-sun
+rule adds the sun gate as a SEPARATE AND-condition:
+`ok = ratio_ok AND forecast_ok` (default False = conservative — the
+fetch/ship lives in main.RealDeps.forecast_ok, never here).
 """
 from __future__ import annotations
 
@@ -55,16 +56,16 @@ def build_off_timer(at_local: datetime, tz: tzinfo) -> dict:
 
 def night_floor_wh(cfg: Config, full_ah: float | None, pack_v: float | None,
                    reserve_floor_pct: int | None = None) -> float | None:
-    """The ONE floor law (owner FINAL rulings 2026-11-13):
+    """The ONE floor law:
     - OUTSIDE the UPS mode there is NO floor subtraction: the head = the raw
       BMS remaining and the PHYSICS at the BMS's own zeros (0 Wh / 0 % SOC)
-      is the floor ("the physics IS the floor at 0 Wh or 0 % SOC").
+      is the floor.
     - The UPS RESERVE TIER (30 %/50 %, the bad-weather band) = the ONLY
       floor = the tier band's Wh (the tier = a BMS-SOC percent of the BMS
       capacity figure).
-    - NO textbook LiFePO4 voltage→SoC table anywhere in this chain (owner
-      engineering doctrine: the BMS = the ONLY sensor and the ONLY truth;
-      any table must come from OUR measurement data, never from a book).
+    - NO textbook LiFePO4 voltage→SoC table anywhere in this chain: the BMS
+      is the only sensor and the only truth; any table must come from OUR
+      measurement data, never from a book.
     Shared by the eve plan, the reference crossing and the gate.
     Tier-inactive → 0.0 (no floor). Tier-active → the band's Wh; None
     whenever a factor is unknown (pack_v checked HERE so the
@@ -81,12 +82,12 @@ def action_day_floor_pct(now: datetime, cfg: Config, *, available_wh,
                          need_wh, load_wh_h, night_len_hours, full_ah,
                          pack_v, reserve_floor_pct,
                          reserve_floor_pct_next) -> int | None:
-    """Owner ruling 2026-11-14 (DAY-OF-ACTION LAW): a timer PROGRAMMED now may
-    FIRE after midnight — the floor it enforces must be the tier OF THE FIRING
-    DAY ("consider the day the actor acts and not the day the programming
-    happens"; the UPS mode is active ONLY on the bad-weather forecast day,
-    never the day after). Probe the crossing under each candidate day's floor
-    and return the floor whose own day matches its crossing:
+    """A timer PROGRAMMED now may FIRE after midnight — the floor it enforces
+    must be the tier OF THE FIRING DAY (the day the actor acts, not the day
+    the programming happens; the UPS mode is active ONLY on the bad-weather
+    forecast day, never the day after). Probe the crossing under each
+    candidate day's floor and return the floor whose own day matches its
+    crossing:
 
     - crossing(today's floor) lands today      → today's floor (today's law);
     - crossing lands after midnight            → switch to tomorrow's floor
@@ -135,17 +136,16 @@ def reference_crossing(now: datetime, available_wh: float | None,
                        pack_v: float | None = None,
                        reserve_floor_pct: int | None = None,
                        reserve_floor_pct_next: int | None = None) -> datetime | None:
-    """Owner REFERENCE-LOAD model (Phase A, 2026-10-30): the SAME crossing law
-    as plan_evening restricted to the reference basis — the overnight
-    re-estimation recomputes t_fire = now + max(0, avail − floor) ÷
-    (load × safety) from the fresh §19 counter anchor. None whenever the
-    available/floor/load is unknown — a guessed time is never returned (the
-    emergency floors keep owning safety underneath).
+    """Reference-load crossing model: the SAME crossing law as plan_evening
+    restricted to the reference basis — the overnight re-estimation recomputes
+    t_fire = now + max(0, avail − floor) ÷ (load × safety) from the fresh
+    event-counter anchor. None whenever the available/floor/load is unknown —
+    a guessed time is never returned (the emergency floors keep owning safety
+    underneath).
 
-    `reserve_floor_pct_next` (owner DAY-OF-ACTION law 2026-11-14): this step
-    RE-PROGRAMS an armed timer — a crossing after midnight must carry the
-    FIRING day's floor, never the programming day's (see
-    action_day_floor_pct)."""
+    `reserve_floor_pct_next`: this step RE-PROGRAMS an armed timer — a
+    crossing after midnight must carry the FIRING day's floor, never the
+    programming day's (see action_day_floor_pct)."""
     floor_wh = night_floor_wh(cfg, full_ah, pack_v, action_day_floor_pct(
         now, cfg, available_wh=available_wh, need_wh=None,
         load_wh_h=load_wh_h, night_len_hours=0.0, full_ah=full_ah,
@@ -160,7 +160,7 @@ def reference_crossing(now: datetime, available_wh: float | None,
 
 def ratio_ok(available_wh: float | None, need_wh: float | None,
              cfg: Config) -> bool:
-    """Spec v4 §3: available ≥ SAFETY × night need. None on either side is
+    """available ≥ SAFETY × night need. None on either side is
     conservatively NOT ok (no guess without evidence)."""
     if available_wh is None or need_wh is None:
         return False
@@ -170,10 +170,10 @@ def ratio_ok(available_wh: float | None, need_wh: float | None,
 def hold_reason(available_wh: float | None, need_wh: float | None,
                 cfg: Config, forecast_ok: bool = True,
                 sun_reason: str = "") -> str:
-    """The single wording source for the grid_hold push (§9.7 honesty fix):
-    NO "grid on:"-prefix duplication (the title already carries the state);
-    numbers only when BOTH figures are known, else a reason without numbers.
-    §9.1 (T3): ratio held but the sun gate said no → the SUN is the reason
+    """The single wording source for the grid_hold push: NO "grid on:"-prefix
+    duplication (the title already carries the state); numbers only when BOTH
+    figures are known, else a reason without numbers.
+    Ratio held but the sun gate said no → the SUN is the reason
     (`sun_reason` = the forecast_ok() explanation; empty = the planner-internal
     call, no dangling colon). Default forecast_ok=True keeps every existing
     call site's wording untouched; None- and ratio-reasons come BEFORE the
@@ -200,80 +200,75 @@ def plan_evening(now: datetime, available_wh: float | None,
                  next_onset: datetime | None = None,
                  load_wh_h: float | None = None,
                  horizon_hours: float | None = None) -> TimerPlan:
-    """v5 evening plan (NORTH STAR spec §13: MAXIMIZE SOLAR USE — owner
-    2026-10-20: battery usage first, no idle half-full battery; the weather
-    gate lives in the MORNING release: whether/how fast the next day refills).
+    """Evening plan (MAXIMIZE SOLAR USE: battery usage first, no idle
+    half-full battery; the weather gate lives in the MORNING release:
+    whether/how fast the next day refills).
     The NEED is the anchor (one CLEAN night suffices, min_clean=1):
     0. need / available / pack_v unknown → conservative: OFF → bring_on_now
        (the grid-off-suppression in main still applies), ON → keep_grid.
     1. need known → battery-first schedule: floor = SoC curve(TRUE_FLOOR_V) ×
-       capacity × LIVE pack_v (owner2026-10-25: voltage-anchored);
+       capacity × LIVE pack_v (voltage-anchored);
        rate = safety × need ÷ max(1.0, night_len) — the plan assumes the
-       night eats safety × the measured need (default safety = 1.0 since the
-       owner's deep-drain ruling2026-10-22: the ×1.2 made the return fire at
-       ~29 % SOC and wasted harvest room; the insurance now is the accepted
-       physical backstop — 0 % BMS ≈ real end 3 V/cell ≈ 12 V pack);
+       night eats safety × the measured need (default safety = 1.0; the ×1.2
+       was dropped because it made the return fire at ~29 % SOC and wasted
+       harvest room; the insurance now is the accepted physical backstop —
+       0 % BMS ≈ real end 3 V/cell ≈ 12 V pack);
        t_fire = now + max(0, available − floor) ÷ rate.
     2. OFF + crossing inside the learned night → failsafe_timer (the grid
        returns at the crossing; the battery carries the head); crossing
        beyond → none (the battery carries the whole night).
     3. ON + headroom above the floor AND a projected grid-off span of at
-       least `release_min_span_min` (30 min, owner 2026-11-13: the
-       21:00 → 21:10 flap — a shorter forecast keeps the grid ON, and an
-       ON caused by an empty battery is never released to OFF by a plan)
+       least `release_min_span_min` (30 min; a shorter forecast keeps the
+       grid ON, and an ON caused by an empty battery is never released to
+       OFF by a plan)
        → release_night THEN failsafe_timer: spend the stored solar NOW,
        program the grid back at the crossing — a passing forecast is NOT
        required at the eve (spending stored solar is always the goal; a
        sunless day simply has the grid carry loads).
     4. ON + no headroom, or a span shorter than the minimum → keep_grid
        (nothing to give above the reserve / not worth the flap).
-    Unknowns never get a guessed number (owner doctrine: sensor values).
+    Unknowns never get a guessed number.
 
-    `reserve_floor_pct` (owner ruling 2026-10-25, part 3): the weather-
-    conditional reserve tier as a BMS-SOC percent — floors the night target
-    at the tier band (max with the voltage-curve floor, see below); main.py
-    passes it only when the latch is > 0 (None/0 = unchanged behavior).
+    `reserve_floor_pct`: the weather-conditional reserve tier as a BMS-SOC
+    percent — floors the night target at the tier band (max with the
+    voltage-curve floor, see below); main.py passes it only when the latch
+    is > 0 (None/0 = unchanged behavior).
 
-    `reserve_floor_pct_next` (owner DAY-OF-ACTION law 2026-11-14): the tier
-    OF THE DAY A PROGRAMMED TIMER FIRES ON. The eve runs on day D but its
-    crossing routinely lands on D+1 — a floor that belongs to day D must not
-    stop the battery a day late, and a floor that belongs to D+1 must stop it
-    ON D+1 ("consider the day the actor acts and not the day the programming
-    happens"). action_day_floor_pct probes the crossing under each day's
-    floor and re-bases the plan; None = no next-day information (old
-    behavior, byte-identical).
+    `reserve_floor_pct_next`: the tier OF THE DAY A PROGRAMMED TIMER FIRES
+    ON. The eve runs on day D but its crossing routinely lands on D+1 — a
+    floor that belongs to day D must not stop the battery a day late, and a
+    floor that belongs to D+1 must stop it ON D+1 (the day the actor acts,
+    not the day the programming happens). action_day_floor_pct probes the
+    crossing under each day's floor and re-bases the plan; None = no
+    next-day information (old behavior, byte-identical).
 
-    `next_onset` (owner ruling §31, 2026-10-28): the ABSOLUTE next solar
-    edge (the array-onset datetime, naive local) — the ON-timer exists ONLY
-    as the WiFi-blackout insurance, so a crossing at/after sunrise must be
-    REFUSED (the 11:38 incident: available ≈ need put the crossing just
-    under the length clamp = an armed post-sunrise device fire). The
-    existing `now + night_len` length clamp stays the OUTER guard (both
-    remain, §32); None = no absolute edge known → the length clamp alone
-    (no guess). On the ON-case the NIGHT RELEASE survives (spending stored
-    solar is its own doctrine §13) — only the obsolete timer is dropped
-    (after sunrise a direct reaction exists).
+    `next_onset`: the ABSOLUTE next solar edge (the array-onset datetime,
+    naive local) — the ON-timer exists ONLY as the WiFi-blackout insurance,
+    so a crossing at/after sunrise must be REFUSED (a crossing just under
+    the length clamp would arm a post-sunrise device fire). The existing
+    `now + night_len` length clamp stays the OUTER guard (both remain);
+    None = no absolute edge known → the length clamp alone (no guess). On
+    the ON-case the NIGHT RELEASE survives (spending stored solar is always
+    the goal) — only the obsolete timer is dropped (after sunrise a direct
+    reaction exists).
 
-    `load_wh_h` (owner REFERENCE-LOAD model, Phase A 2026-10-30): the
-    measured house load of the newest qualifying calendar night (grid-OFF
-    clip mean, Wh/h, reference.reference_load). Present → it REPLACES the
-    median basis in the crossing rate (rate = load × safety); absent (None)
-    → the legacy rate need × safety ÷ night_len, byte-identical to the old
-    behavior (night_len stays the horizon clamp/divisor fallback — Phase B
-    redoes it). The safety factor rides the LOAD (conservative-preserving);
-    the owner CLOSED safety at 1.0 (2026-10-30, "change nothing about it") —
-    NOT an open knob.
+    `load_wh_h`: the measured house load of the newest qualifying calendar
+    night (grid-OFF clip mean, Wh/h, reference.reference_load). Present →
+    it REPLACES the median basis in the crossing rate (rate = load ×
+    safety); absent (None) → the legacy rate need × safety ÷ night_len,
+    byte-identical to the old behavior (night_len stays the horizon
+    clamp/divisor fallback). The safety factor rides the LOAD
+    (conservative-preserving); safety is CLOSED at 1.0 — NOT an open knob.
 
-    `horizon_hours` (Phase B re-scope, folded into the C/D wave): the LENGTH
-    clamp may run on a horizon of ANY measured span length (owner: the gate
-    was horizon-blocking; the crossing's fallback divisor is a SEPARATE role —
-    night_len keeps its semantics untouched, only the clamp reads this).
-    None (default) → the clamp uses night_len_hours exactly as before."""
-    # owner rulings 2026-10-25 (L2 wave1 + part 3): the ONE floor law moved
-    # into night_floor_wh (SoC curve × capacity × live pack_v, reserve tier
-    # via max()) — shared with the overnight re-estimation; unknown factor →
-    # None → the conservative branch below (no guessed floor, no TypeError).
-    # owner DAY-OF-ACTION law 2026-11-14: the floor is selected for the day
+    `horizon_hours`: the LENGTH clamp may run on a horizon of ANY measured
+    span length (the gate must not be horizon-blocking; the crossing's
+    fallback divisor is a SEPARATE role — night_len keeps its semantics
+    untouched, only the clamp reads this). None (default) → the clamp uses
+    night_len_hours exactly as before."""
+    # The ONE floor law lives in night_floor_wh (SoC curve × capacity ×
+    # live pack_v, reserve tier via max()) — shared with the overnight
+    # re-estimation; unknown factor → None → the conservative branch below
+    # (no guessed floor, no TypeError). The floor is selected for the day
     # the timer FIRES on (a next-day crossing re-bases on the next day's
     # tier) — action_day_floor_pct.
     floor_wh = night_floor_wh(cfg, full_ah, pack_v, action_day_floor_pct(
@@ -281,14 +276,14 @@ def plan_evening(now: datetime, available_wh: float | None,
         load_wh_h=load_wh_h, night_len_hours=night_len_hours, full_ah=full_ah,
         pack_v=pack_v, reserve_floor_pct=reserve_floor_pct,
         reserve_floor_pct_next=reserve_floor_pct_next))
-    # owner ruling 2026-11-12 (21:33 incident): the REFERENCE RATE (load_wh_h,
-    # the post-sunset grid-off clip mean Wh/h) IS a need basis — the rate law
-    # below already projects it (rate = load × safety → t_fire → the actor-
-    # programmed crossing, the evening gate's own mechanism). Exiting on
-    # need_wh=None ALONE threw the measured load away: with no clean night
-    # (need=None) the plan fell to the conservative bring_on_now, the grid-off
-    # rule suppressed that to NOTHING and NO timer was programmed — the
-    # battery bled toward the floor with nothing armed. Conservative branch
+    # The REFERENCE RATE (load_wh_h, the post-sunset grid-off clip mean
+    # Wh/h) IS a need basis — the rate law below already projects it
+    # (rate = load × safety → t_fire → the actor-programmed crossing, the
+    # evening gate's own mechanism). Exiting on need_wh=None ALONE would
+    # throw the measured load away: with no clean night (need=None) the
+    # plan falls to the conservative bring_on_now, the grid-off rule
+    # suppresses that to NOTHING and NO timer is programmed — the battery
+    # would bleed toward the floor with nothing armed. Conservative branch
     # only when NEITHER basis exists (need AND rate unknown, non-positive
     # rate proves nothing); everything else keeps its old behavior.
     if ((need_wh is None and (load_wh_h is None or load_wh_h <= 0))
@@ -298,46 +293,44 @@ def plan_evening(now: datetime, available_wh: float | None,
             return TimerPlan(actions=[("keep_grid",
                                        {"reason": hold_reason(available_wh, need_wh, cfg)})])
         return TimerPlan(actions=[("bring_on_now", {})])
-    # owner REFERENCE-LOAD model (Phase A 2026-10-30): the rate law. With a
-    # measured calendar-night clip load it IS the load (× safety — the
-    # conservative-preserving placement; the owner CLOSED safety at 1.0 on
-    # 2026-10-30, "change nothing about it" — NOT a knob); without it the legacy
-    # median basis (need × safety ÷ night_len) stays byte-identical —
-    # night_len remains the horizon fallback, never the reference's divisor.
+    # The rate law: with a measured calendar-night clip load it IS the load
+    # (× safety — the conservative-preserving placement; safety is CLOSED
+    # at 1.0, NOT a knob); without it the legacy median basis
+    # (need × safety ÷ night_len) stays byte-identical — night_len remains
+    # the horizon fallback, never the reference's divisor.
     if load_wh_h is not None and load_wh_h > 0:
         rate = load_wh_h * cfg.safety_factor
     else:
         rate = need_wh * cfg.safety_factor / max(1.0, night_len_hours)
     head = max(0.0, available_wh - floor_wh)
     t_fire = now + timedelta(hours=head / rate)
-    # owner final spec 2026-11-13 (the inspection): the device cron is
-    # minute-granular — never arm a minute already gone (the dead
-    # 21:24:07-for-21:24 class). The crossing stands, clamped to the NEXT
-    # full minute (≤ 60 s shift, fires for sure); the physics below the
-    # band is the safety, never a re-timer.
+    # The device cron is minute-granular — never arm a minute already gone
+    # (a dead past minute would never fire). The crossing stands, clamped
+    # to the NEXT full minute (≤ 60 s shift, fires for sure); the physics
+    # below the band is the safety, never a re-timer.
     _next_min = now.replace(second=0, microsecond=0) + timedelta(minutes=1)
     if t_fire < _next_min:
         t_fire = _next_min
-    # Phase B: the length clamp reads the HORIZON (any measured span length
-    # via horizon_hours); night_len above stays the fallback divisor role
+    # The length clamp reads the HORIZON (any measured span length via
+    # horizon_hours); night_len above stays the fallback divisor role
     horizon = horizon_hours if horizon_hours is not None else night_len_hours
     if switch_state == "off":
-        # owner final spec 2026-11-13 (the inspection): OUT of the middle
-        # band (head ≤ 0, the BMS values exhausted) the plan WAITS — the
-        # cell-voltage observation owns the edge (`voltage_floor_hit` → the
-        # emergency, reach-gated; it can't act while the actor is offline =
-        # why the prediction pre-programs the middle band's crossings in
-        # advance). No premature rescue (the reserve below the BMS zero is
-        # real), no dead past-timer (the clamp above).
+        # OUT of the middle band (head ≤ 0, the BMS values exhausted) the
+        # plan WAITS — the cell-voltage observation owns the edge
+        # (`voltage_floor_hit` → the emergency, reach-gated; it can't act
+        # while the actor is offline = why the prediction pre-programs the
+        # middle band's crossings in advance). No premature rescue (the
+        # reserve below the BMS zero is real), no dead past-timer (the
+        # clamp above).
         if head <= 0:
             return TimerPlan(actions=[("none",
                                        {"reason": "out of band: cell-voltage observation"})])
         if t_fire >= now + timedelta(hours=horizon):
             return TimerPlan(actions=[("none",
                                        {"reason": "battery carries the whole night"})])
-        # owner ruling §31 (§32: both clamps stay): the ABSOLUTE edge — a
-        # crossing at/after the next array-onset would arm a post-sunrise
-        # fire whose purpose (the blackout) is over before it even starts.
+        # The ABSOLUTE edge — a crossing at/after the next array-onset
+        # would arm a post-sunrise fire whose purpose (the blackout) is
+        # over before it even starts.
         if next_onset is not None and t_fire >= next_onset:
             return TimerPlan(actions=[("none",
                                        {"reason": "battery carries until sunrise"})])
@@ -348,18 +341,18 @@ def plan_evening(now: datetime, available_wh: float | None,
     if head <= 0:
         return TimerPlan(actions=[("keep_grid",
                                    {"reason": "reason: battery at floor reserve only"})])
-    # owner rulings 2026-11-13 (the live 21:00 → 21:10 flap): (1) a plan
-    # whose projected grid-off span is SHORTER than cfg.release_min_span_min
-    # (30) minutes must KEEP the grid ON state — releasing for a span the
-    # battery barely covers only manufactures an ON → OFF → ON nonsense
-    # cycle; (2) when the grid is ALREADY ON because the battery is too
-    # empty, no plan may switch to GRID OFF — too-empty = a short projected
-    # span, so both rulings share one reality anchor: head ÷ rate against
-    # the LIVE headroom and the reference rate (never a guessed number).
+    # (1) a plan whose projected grid-off span is SHORTER than
+    # cfg.release_min_span_min (30) minutes must KEEP the grid ON state —
+    # releasing for a span the battery barely covers only manufactures an
+    # ON → OFF → ON nonsense cycle; (2) when the grid is ALREADY ON because
+    # the battery is too empty, no plan may switch to GRID OFF — too-empty
+    # = a short projected span, so both rules share one reality anchor:
+    # head ÷ rate against the LIVE headroom and the reference rate (never
+    # a guessed number).
     if (t_fire - now) < timedelta(minutes=cfg.release_min_span_min):
         return TimerPlan(actions=[("keep_grid",
                                    {"reason": "short span (<30 min): grid ON kept"})])
-    # §31 ON-case: the release stays (§13), the post-sunrise TIMER does not —
+    # ON-case: the release stays, the post-sunrise TIMER does not —
     # the direct reaction exists once actor contact is back after sunrise.
     if next_onset is not None and t_fire >= next_onset:
         return TimerPlan(actions=[("release_night", {})])

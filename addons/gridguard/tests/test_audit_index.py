@@ -1,4 +1,4 @@
-"""spec §10b Decision-Index dual-write — every jsonl audit record is ALSO
+"""Decision-Index dual-write — every jsonl audit record is ALSO
 best-effort POSTed to {os_url}/{EVENTS_INDEX_PREFIX}-{YYYY.MM.DD}/_doc with the
 same (R7-clean) payload + additive `dry_run`.
 
@@ -55,7 +55,7 @@ def test_dual_write_posts_dated_index_with_record_and_dry_run(tmp_path):
     log.record("tick", phase="eve_plan", verdict="safe_clear")
     assert len(posts) == 1
     url, body, timeout = posts[0]
-    # 2026-10-19T12:00Z = 14:00 Madrid → local date stays the 19th
+    # 12:00Z = 14:00 Madrid → local date stays the 19th
     assert url == f"{OS_URL}/gridguard-events-2026.10.19/_doc"
     assert timeout == 3.0                                    # short stdlib timeout
     doc = json.loads(body)
@@ -115,9 +115,9 @@ def test_post_errors_throttle_to_one_stderr_line_per_hour(tmp_path, capsys):
 
 
 def test_utc_ts_is_tomorrow_in_local_tz_index_uses_local_date(tmp_path):
-    from gridguard.audit import _local_date   # wished-for helper (spec §10b date math)
-    # PIN (date math): 2026-10-19T23:30Z = 2026-10-20 01:30 CEST (Madrid DST
-    # runs to 2026-10-25) → the doc lands in the LOCAL day: …-2026.10.20/_doc
+    from gridguard.audit import _local_date   # the date-math helper
+    # PIN (date math): 23:30Z = 01:30 next day CEST (Madrid) → the doc lands
+    # in the LOCAL day: …-2026.10.20/_doc
     assert _local_date("2026-10-19T23:30:00+00:00", MADRID) == date(2026, 10, 20)
     # naive ts = local wall-clock by contract → stays on the 19th
     assert _local_date("2026-10-19T23:30:00", MADRID) == date(2026, 10, 19)
@@ -129,7 +129,7 @@ def test_utc_ts_is_tomorrow_in_local_tz_index_uses_local_date(tmp_path):
 
 
 def test_realdeps_start_and_push_flow_into_decision_index(tmp_path, monkeypatch):
-    """§2: start + push need NO new call site — they flow through the one writer."""
+    """start + push need NO new call site — they flow through the one writer."""
     class Stub:
         def __init__(self, *a, **k): pass
 
@@ -144,7 +144,7 @@ def test_realdeps_start_and_push_flow_into_decision_index(tmp_path, monkeypatch)
     posts: list = []
     deps.audit_log._post = lambda url, body, timeout: posts.append((url, body, timeout))
     deps.audit("start", result="dry_run=True")             # run()'s first record
-    deps.push("GRID ON", "reason: night need 800 Wh")            # §9.7 push → same writer
+    deps.push("GRID ON", "reason: night need 800 Wh")            # push → same writer
     events = [json.loads(b)["event"] for _, b, _ in posts]
     assert events == ["start", "push"]
     assert all(u.startswith(f"{OS_URL}/gridguard-events-") for u, _, _ in posts)
@@ -154,7 +154,7 @@ def test_realdeps_start_and_push_flow_into_decision_index(tmp_path, monkeypatch)
 
 
 def test_record_echoes_each_event_to_stdout_tee_style(tmp_path, capsys):
-    """Owner2026-10-21: OpenSearch stays THE one source (index = query truth,
+    """OpenSearch stays THE one source (index = query truth,
     jsonl = robustness truth); the console additionally SHOWS every audit record
     like a `tee`, so `docker logs` reveals what the loop decided instead of a
     silent container. The echo is purely additive — the record and the dual-write

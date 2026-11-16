@@ -1,4 +1,4 @@
-"""§12.1 self-optimization basis — `weather.ship_forecast` dual-writes EVERY
+"""Self-optimization basis: `weather.ship_forecast` dual-writes EVERY
 forecast (also radiation=None error days) as one doc into
 `{os_url}/{WEATHER_INDEX_PREFIX}-{YYYY.MM.DD}/_doc/{md5}`:
 md5-idempotent per local-day+value (id = md5(f"{day}|forecast|{r}")),
@@ -147,7 +147,7 @@ def test_default_post_is_stdlib_request_with_short_timeout(monkeypatch):
     assert sent["source"] == "open-meteo"
 
 
-# --- morning_radiation_j: units contract (Owner-LIVE2026-10-20) ---------------
+# --- morning_radiation_j: units contract --------------------------------------
 # open-meteo delivers shortwave_radiation_sum in MJ/m²/day (WMO convention;
 # physics double-check Málaga 10./19.10: raw 10.0/11.87 = 2.8/3.3 kWh plausible,
 # kWh/Wh readings absurd). The gate comparison (WEATHER_MIN_J) = JOULE.
@@ -194,7 +194,7 @@ def test_morning_radiation_failure_and_empty_still_none():
     assert w.morning_radiation_j() is None
 
 
-# --- sunrise/sunset from the SAME open-meteo call (owner2026-10-21) ------------
+# --- sunrise/sunset from the SAME open-meteo call -----------------------------
 # No astral/ephem dependency: the solar-day boundary needs the CALENDAR
 # sunrise/sunset for the site, and open-meteo already knows the location
 # (same lat/lon as the radiation sum). One API, one truth, stdlib parse.
@@ -238,8 +238,8 @@ def test_sun_times_none_when_api_omits_or_fails():
     assert w.sun_times() == (None, None)
 
 
-# --- daily_outlook / ship_outlook — storm-indicator outake (Owner2026-10-23,
-# DATA ONLY: no policy, no gate, no consumer) ----------------------------------
+# --- daily_outlook / ship_outlook — storm-indicator outake --------------------
+# DATA ONLY: no policy, no gate, no consumer ----------------------------------
 def _outlook_payload():
     """Live shape of the daily response (checked 23.10.: all four indicators
     incl. cape_max are really delivered by the free API)."""
@@ -250,7 +250,7 @@ def _outlook_payload():
         "wind_gusts_10m_max": [41.4, 78.0, 31.0],
         "cape_max": [10.0, 850.0, None],
         "precipitation_sum": [0.0, 12.5, 0.6]},
-        # owner ruling 2026-11-03 (metric switch): the free tier's HOURLY
+        # METRIC SWITCH: the free tier's HOURLY
         # precipitation (mm per hour) — the source of each day's max rate
         "hourly": {
             "time": ["2026-10-23T00:00", "2026-10-23T13:00",
@@ -273,7 +273,7 @@ def test_daily_outlook_parses_indicator_arrays():
 
 
 def test_daily_outlook_carries_max_hourly_rain_intensity():
-    # Owner ruling 2026-11-03 (metric switch): per LOCAL day the max hourly
+    # METRIC SWITCH: per LOCAL day the max hourly
     # rate (mm/h) — the reserve tier's severe rain leg reads THIS, never the
     # daily sum. Grouping = the hourly timestamp's date prefix (timezone=auto
     # delivers naive local hours, aligned with daily.time).
@@ -314,7 +314,9 @@ def test_ship_outlook_rolling_day_id_null_days_and_kill_switch():
     assert payload["days"] == days
     day = datetime.fromisoformat(payload["ts"]).date().strftime("%Y.%m.%d")
     stable = hashlib.md5(f"{day}|outlook".encode()).hexdigest()
-    assert url == f"{OS_URL}/gridguard-weather-{day}/_doc/{stable}"
+    # refresh=true: the eve ships then reads this copy in the same consult —
+    # the forced refresh closes the read-after-write race for load_outlook
+    assert url == f"{OS_URL}/gridguard-weather-{day}/_doc/{stable}?refresh=true"
     # rolling-latest: a second ship on the same day writes the SAME doc-id
     ship_outlook(cfg, days, _post=_sink(posts))
     assert posts[1][0] == url
@@ -328,7 +330,7 @@ def test_ship_outlook_rolling_day_id_null_days_and_kill_switch():
 
 
 def test_daily_outlook_carries_radiation_sum_j_per_day():
-    """owner ruling 2026-10-25 (part 3) — the outlook writer (l3 intake) now
+    """The outlook writer (l3 intake) now
     ALSO asks the SAME open-meteo request for shortwave_radiation_sum, so the
     tier-1 trigger gets a per-day expected-harvest input without a second
     request. MJ/m²/day → Joule like the morning_radiation_j contract; a
@@ -355,3 +357,64 @@ def test_daily_outlook_carries_radiation_sum_j_per_day():
     # the existing indicator fields are untouched by the added column
     assert out[0]["weather_code"] == 3 and out[1]["gust_max_kmh"] == 78.0
     assert out[1]["cape_max_j"] == 850.0
+
+
+# --- the READ side of the outlook intake ------------------------------------
+# ship_outlook writes; load_outlook reads the newest shipped copy straight
+# from the OpenSearch cluster so no timer/tier evaluation ever depends on
+# process memory, restart timing or deploy order.
+
+def _search_sink(hits):
+    def fake(cfg, body):
+        return {"hits": {"hits": hits}}
+    return fake
+
+
+def test_load_outlook_reads_the_newest_shipped_doc():
+    days = [{"date": "2026-11-15", "weather_code": 3, "radiation_sum_j": 9.9e6}]
+    got = weather_mod.load_outlook(
+        _cfg(), _search=_search_sink(
+            [{"_source": {"ts": "2026-11-15T23:38:58+01:00", "days": days}}]))
+    assert got == (days, "2026-11-15T23:38:58+01:00")
+
+
+def test_load_outlook_absent_or_failed_day_is_honest_none():
+    assert weather_mod.load_outlook(_cfg(), _search=_search_sink([])) == (None, None)
+    # a shipped fetch-failure day (days: null) never passes as data
+    assert weather_mod.load_outlook(
+        _cfg(), _search=_search_sink([{"_source": {"ts": "t", "days": None}}])) \
+        == (None, None)
+
+
+def test_load_outlook_queries_kind_outlook_newest_first():
+    seen = {}
+
+    def spy(cfg, body):
+        seen.update(body)
+        return {"hits": {"hits": []}}
+
+    weather_mod.load_outlook(_cfg(), _search=spy)
+    assert seen["size"] == 1
+    assert seen["sort"] == [{"ts": "desc"}]
+    assert seen["query"] == {"term": {"kind": "outlook"}}
+
+
+def test_load_outlook_kill_switch_returns_none_without_any_query():
+    def boom(cfg, body):
+        raise AssertionError("kill-switch must not query the cluster")
+    assert weather_mod.load_outlook(_cfg(WEATHER_INDEX="0"), _search=boom) \
+        == (None, None)
+
+
+def test_load_outlook_query_failure_is_honest_none_never_raises():
+    def boom(cfg, body):
+        raise URLError("cluster down")
+    assert weather_mod.load_outlook(_cfg(), _search=boom) == (None, None)
+
+
+def test_ship_outlook_refreshes_immediately_so_the_read_side_sees_it():
+    # the eve ships then reads the cluster in the same consult — refresh=true
+    # closes the read-after-write race
+    posts = []
+    ship_outlook(_cfg(), [{"date": "2026-11-15"}], _post=_sink(posts))
+    assert "refresh=true" in posts[0][0]

@@ -1,4 +1,4 @@
-"""Display-truth copy pins (owner brief 2026-10-26).
+"""Display-truth copy pins.
 
 1) night_over detail: the event marks the transition INTO the night phase —
    the DAY window ended → night begins. The old copy
@@ -25,24 +25,24 @@ def test_hero_announced_reads_write_confirmed_field_with_plan_ideal_label():
 
 
 def test_decision_log_shows_programmed_time_of_each_ladder_write():
-    # review nit (6a92dd1): pin the DETAIL-line context, not the bare token —
+    # pin the DETAIL-line context, not the bare token —
     # "fire_str" also appears in hero comments, so a reverted detail() line
     # must fail here; the page byte-golden stays the backstop
     assert 'if(i.fire_str) bits.push("programmed "+i.fire_str)' in PAGE
 
 
 def test_history_note_names_write_confirmed_programs_and_labelled_markers():
-    """Ruling #10: the timeline note must describe the ACTUAL boundary
-    sources (write-confirmed programs + observations), and the plan ideal
-    as a labelled marker — not as an announcement/boundary."""
+    """Boundary-truth note: the timeline note must describe the ACTUAL
+    boundary sources (write-confirmed programs + observations), and the plan
+    ideal as a labelled marker — not as an announcement/boundary."""
     assert "write-confirmed timer programs" in PAGE
     assert "announced device-timer programs" not in PAGE
     assert "plan ideals appear as labelled markers" in PAGE
 
 
 def test_history_renders_plan_marks_and_measurement_derived_starts():
-    """The two ruling-#10 disclosures in the history markup: plan ideals as
-    labelled context (plan_marks) and the fill-derived ON boundary marked
+    """The two boundary-truth disclosures in the history markup: plan ideals
+    as labelled context (plan_marks) and the fill-derived ON boundary marked
     as measurement-derived (s.src==='measured')."""
     assert "plan_marks" in PAGE
     assert 's.src==="measured"' in PAGE
@@ -50,15 +50,15 @@ def test_history_renders_plan_marks_and_measurement_derived_starts():
 
 
 def test_actor_reachability_line_on_the_first_card():
-    """Owner REFINEMENT order 2026-11-12: the reachability sits at the BOTTOM
-    LEFT of the Grid state card as a small SENTENCE in standard color — ONLY
-    the state word is coloured ('actor is reachable' green / 'actor is
-    currently not reachable' amber); absent = nothing rendered (honest:
-    never infer reachability)."""
+    """Placement pin: the reachability sits at the BOTTOM LEFT of the Grid
+    state card as a small SENTENCE in standard color — ONLY the state word
+    is coloured ('actor is reachable' green / 'actor is currently not
+    reachable' amber); absent = nothing rendered (honest: never infer
+    reachability)."""
     assert 'id="hero-reach"' in PAGE                 # the card slot
     assert 'class="card card-state"' in PAGE         # the positioning context
     assert "actor_reachable" in PAGE                 # the payload field read
-    assert "actor is currently " in PAGE             # the owner's False wording
+    assert "actor is currently " in PAGE             # the False wording
     assert ">reachable</span>" in PAGE               # ... coloured state words
     assert ">not reachable</span>" in PAGE
     assert ".hero-reach .st.ok" in PAGE and ".hero-reach .st.bad" in PAGE  # green / amber

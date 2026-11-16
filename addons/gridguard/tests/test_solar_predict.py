@@ -1,4 +1,5 @@
-"""Phases C + D (+ B folded) — RED fixtures (review wave on 6b4be64).
+"""RED fixtures for the solar-day prediction, horizon source chain and
+reference visibility.
 
 C — the forecast onset link ("Will there be a solar day tomorrow?"): an honest,
 statistic-modest prediction of the next solar day and its onset from the TWO
@@ -49,8 +50,8 @@ def _need_c():
 
 
 # ---------------------------------------------------------------------------
-# C1 — the sunny-chain analog (owner: "will very probably be the one from
-# yesterday, timing-wise, if yesterday's weather was nice too")
+# C1 — the sunny-chain analog (a nice yesterday predicts a similar day,
+# timing-wise, when the recent weather was nice too)
 def _naive(d, h, m):
     return datetime(2026, 10, d, h, m)
 
@@ -166,15 +167,21 @@ def test_learned_profile_stays_the_existing_fallback_after_the_prediction():
 
 # ---------------------------------------------------------------------------
 # C4 — every prediction evaluation is AUDITED with the full basis
-def test_realdeps_evaluates_and_audits_the_prediction_with_full_basis(tmp_path):
+def test_realdeps_evaluates_and_audits_the_prediction_with_full_basis(tmp_path,
+                                                                     monkeypatch):
     c = load_config({**GOOD, "LOG_DIR": str(tmp_path)})
     deps = RealDeps(c)
     recs = []
     deps.audit = lambda ev, **f: recs.append((ev, f))     # capture, no journal I/O
     today = datetime.now(c.tz).date()
     yday, tgt = today - timedelta(days=1), today + timedelta(days=1)
-    deps._set_outlook([{"date": yday.isoformat(), "radiation_sum_j": 4.3e6},
-                       {"date": tgt.isoformat(), "radiation_sum_j": 4.0e6}])
+    # outlook_days reads the cluster copy (load_outlook) — serve the shipped
+    # outlook the intake would have written
+    import gridguard.main as main_mod
+    days = [{"date": yday.isoformat(), "radiation_sum_j": 4.3e6},
+            {"date": tgt.isoformat(), "radiation_sum_j": 4.0e6}]
+    monkeypatch.setattr(main_mod, "load_outlook",
+                        lambda cfg, _search=None: (days, "cluster-ts"))
     s = datetime.now(c.tz).replace(hour=7, minute=42, second=0,
                                    microsecond=0) - timedelta(days=1)
     deps.solar_windows = lambda: ({yday: (s, s.replace(hour=17, minute=49))}, {})
@@ -210,7 +217,7 @@ def test_eve_uses_any_measured_span_length_as_the_horizon_40h_included():
     # span = 40 h (Oct16 15:55 → Oct18 07:55); crossing +11.5 h: the OLD gate
     # refused the span → night_len fell back to 11 h → "battery carries" (none).
     # The new code serves the horizon with the measured 40 h → armed.
-    # avail = rate × 11.5 h — owner floor law 2026-11-13: NO floor outside the
+    # avail = rate × 11.5 h — floor law: NO floor outside the
     # UPS mode, so the raw remaining IS the head.
     SPANS40 = {datetime(2026, 10, 18, 7, 55):
                (datetime(2026, 10, 16, 15, 55), datetime(2026, 10, 18, 7, 55))}
@@ -227,7 +234,7 @@ def test_eve_uses_any_measured_span_length_as_the_horizon_40h_included():
 
 
 def test_planner_horizon_hours_overrides_only_the_length_clamp():
-    # raw head (owner floor law 2026-11-13: no floor outside the UPS mode)
+    # raw head (floor law: no floor outside the UPS mode)
     avail = 100.0 * cfg.safety_factor / 11.0 * 11.5
     args = dict(available_wh=avail, need_wh=100.0, switch_state="off",
                 night_len_hours=11.0, cfg=cfg, forecast_ok=True,
@@ -418,7 +425,7 @@ def test_onset_label_renders_after_the_ap_eve_assignment():
 # ---------------------------------------------------------------------------
 # F-4 (pins): the chain MEAN + the exact 36-h freshness boundary
 def test_sunny_chain_multiple_similar_days_use_the_chain_mean_newest_first():
-    """The owner's "the amount of data merely helps a better average":
+    """More data merely helps a better average:
     two recent similar sunny days (07:41 + 07:42) → the plain
     MEAN of their measured onsets, analog_day = the NEWEST of the chain."""
     _need_c()

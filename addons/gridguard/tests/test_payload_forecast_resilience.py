@@ -1,15 +1,13 @@
-"""Payload survives a DEAD forecast dependency — owner order 2026-11-02.
+"""Payload survives a DEAD forecast dependency.
 
-Wire evidence (host50, 2026-11-02T15:10Z): open-meteo answered
-`503 {"error":true,"reason":"The service is overloaded"}` on every attempt;
-`_forecast3()` unwound `fetch_gridguard()` at web_payload.py:1059, the
-webservice answered 502, and the page blanked ALL fields (SOC, history,
-plan — data the payload already held) behind one unguarded external call.
+A live open-meteo outage (503 "service is overloaded" on every attempt) once
+unwound `fetch_gridguard()` in `_forecast3()`, so the webservice answered 502
+and the page blanked ALL fields (SOC, history, plan — data the payload already
+held) behind one unguarded external call.
 
-Doctrine applied to the payload side (the decision path already has it,
-fc61806: consult-side deps must never kill): forecast3 = None + the other
-contract keys intact; the page's own JS (`g.forecast3||[]`) renders
-"forecast unavailable" for null — display-truth without a frontend change.
+Required contract here: forecast3 = None while the other contract keys stay
+intact; the page's own JS (`g.forecast3||[]`) renders "forecast unavailable"
+for null — display-truth without a frontend change.
 """
 import importlib
 import io

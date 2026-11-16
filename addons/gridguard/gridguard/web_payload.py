@@ -6,28 +6,28 @@ OS = os.environ.get("OPENSEARCH_URL", "http://127.0.0.1:9200").rstrip("/")
 INDEX = os.environ.get("INDEX", "jkbms-*")
 TZ = os.environ.get("CHARTS_TZ", "UTC")
 
-# --- GridGuard tab (owner spec2026-10-20) ---------------------------------
+# --- GridGuard tab -----------------------------------------------------------
 GG_EVENTS = os.environ.get("GG_EVENTS_INDEX", "gridguard-events-*")
 GG_WEATHER = os.environ.get("GG_WEATHER_INDEX", "gridguard-weather-*")
 GG_SOLARDAY_H = int(os.environ.get("GG_SOLARDAY_H", "6"))   # history-horizon anchor only (see below)
-GG_FLOW_A = float(os.environ.get("GG_FLOW_A", "3.0"))       # solar-day flow threshold (A) — owner rule (2026-10-22: raised 2.0→3.0): the DAY starts at the first ≥3A charge after sunrise, ends at the last ≥3A before sunset; below is NOT solar day — the measured sister-pack balancing transient (2.676A step at a switch instant) must never open a false day, cost on a real dawn ≈4min
-# OWNER DIRECTIVE 2026-10-26 (no frontend value inventions): there is NO
-# GG_WEATHER_MIN_J read/mirror here anymore — the shared bad-solar reference
+GG_FLOW_A = float(os.environ.get("GG_FLOW_A", "3.0"))       # solar-day flow threshold (A): the DAY starts at the first ≥3A charge after sunrise, ends at the last ≥3A before sunset; below is NOT solar day — the measured sister-pack balancing transient (2.676A step at a switch instant) must never open a false day, cost on a real dawn ≈4min
+# No frontend value inventions: there is NO
+# GG_WEATHER_MIN_J read/mirror here — the shared bad-solar reference
 # renders from BACKEND EVENTS only (see ref_kwh in fetch_gridguard:
 # reserve_tier.reference_kwh_m2, fallback grid_off.weather_min_j) → absent
 # from the events = no number on screen.
 GG_LAT = os.environ.get("GG_LAT", "36.76")                  # site coords (same as the addon)
 GG_LON = os.environ.get("GG_LON", "-4.19")
 
-# owner REFERENCE-LOAD model (Phase A): locale-free English labels for the
+# locale-free English labels for the
 # compact last_ref line ("Thu 29 Oct") — strftime %a/%b would follow the
 # process locale and the payload golden is byte-exact
 _WD = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
 _MO = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
        "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
-# sun times are CONSTANTS within a local day — cache per date (owner find
-# 2026-10-24: the 60-s auto-refresh issued ~11k open-meteo calls/day, got
+# sun times are CONSTANTS within a local day — cache per date (the 60-s
+# auto-refresh would otherwise issue ~11k open-meteo calls/day, get
 # throttled → transient (None, None) → dates chained as "sunless" and whole
 # history rows vanished between refreshes). Failed fetches are NOT cached
 # (the next refresh self-heals).
@@ -39,7 +39,7 @@ _FC3 = {"ts": 0.0, "data": None}
 def _forecast3():
     """Next3 days' irradiation forecast (open-meteo; same unit contract as the
     addon: MJ/m²/day → kWh/m² for display). Cached60s — the page polls.
-    OWNER DIRECTIVE 2026-10-26: NO reference comparison here anymore — the
+    NO reference comparison here — the
     shared bad-solar reference lives in the BACKEND EVENTS (ref_kwh, resolved
     in fetch_gridguard) and gate_ok is applied there per payload value."""
     if time.time() - _FC3["ts"] < 60 and _FC3["data"] is not None:
@@ -84,7 +84,7 @@ def _gg_msearch(index: str, bodies: list[dict]) -> list[dict]:
     return out
 
 
-# Owner QA ruling 2026-10-21: ALL energy aggregation/integration happens IN THE
+# ALL energy aggregation/integration happens IN THE
 # CLUSTER — never in local code (no drift between implementations; the addon's
 # learning tasks issue the same aggregation). This scripted_metric sums the
 # per-sample power (pack.current × pack.voltage, W) over a window; the only
@@ -103,7 +103,7 @@ ENERGY_AGG = {"e": {"scripted_metric": {
                       "return s;")}}}
 
 
-# --- owner ruling #10 (2026-10-26): WINDOW TO BACK-END TRUTH — boundary tiers
+# --- WINDOW FROM BACK-END TRUTH: boundary tiers ------------------------------
 def _write_confirmed_fires(gen_hits, cancels, now, tz):
     """Tier (1): ON state evidence from WRITE-CONFIRMED program generations
     (ensure_on acts carrying inputs.fire_str; hits ASC by ts — the query
@@ -113,8 +113,8 @@ def _write_confirmed_fires(gen_hits, cancels, now, tz):
     fire disarms it; only an ALREADY-PASSED fire becomes evidence (an unfired
     eve target asserts nothing in the past — its movement shows in the hero
     announced and the act trail instead). Returns fire datetimes (tz-local),
-    ascending. Time-bearing history starts the night the writer shipped
-    (2026-10-26); older days fall to tier (2)/(3)."""
+    ascending. Time-bearing history starts the night the writer shipped;
+    older days fall to tier (2)/(3)."""
     prog = []
     for src in gen_hits:
         try:
@@ -149,13 +149,12 @@ def _measured_on_fill(evidence, day_bounds, tier1_fires=()):
     """Tier (2): the off→on STATE GAP the journal never observed (the device
     fires across the unreachable window) closes at the CLUSTER-measured
     first-positive intake when that measurement falls STRICTLY inside the
-    gap (owner-accepted instantiation of "the amp-curve" tier, ruling #10 —
-    deliberately no thresholds: a steepness discriminator cannot separate a
+    gap (deliberately no thresholds: a steepness discriminator cannot separate a
     fire-step from a cloud-edge ramp step either). Measurement outside the
     gap → the observed boundary stands unchanged (fallback); on→off gaps are
     never filled; equality with a gap edge (M == t0 / M == t1) is OUTSIDE
     the strictly-inside contract (no fill).
-    TRUE TIER-1 DOMINANCE (fix round, review b8776ee): tier-1 else tier-2 —
+    TRUE TIER-1 DOMINANCE: tier-1 else tier-2 —
     whenever a write-confirmed fire OWNS the gap (lies in [t0, t1]), tier-1
     wins UNCONDITIONALLY: the fill applies only when NO tier-1 fire is
     present for that gap, so the fire instant stands even on a sunny
@@ -192,7 +191,7 @@ def _measured_on_fill(evidence, day_bounds, tier1_fires=()):
 
 
 def _plan_marks_into(history_plan, programs):
-    """Plan ideals as EXPLICITLY-LABELLED context (ruling #10): each passed
+    """Plan ideals as EXPLICITLY-LABELLED context: each passed
     program anchor lands as extra["plan_marks"] = [{"at", "time"}] on the
     history row CONTAINING it — never state evidence; an anchor outside every
     row is dropped (absence over fabrication)."""
@@ -208,21 +207,21 @@ def fetch_gridguard() -> dict:
     """Third tab: solar-day energy ledger + tonight's plan + decision log.
 
     Wire units: **kWh** (+ kWh/m² for irradiation) — the trade unit of PV
-    installations, owner ruling. Physics axioms (owner): the inverter is an
+    installations. Physics axioms: the inverter is an
     online UPS with battery-charge function OFF — grid ON ⇒ the battery is
     neither charged (solar is the ONLY charge path) nor discharged (the UPS
     feeds the loads); power-out inside KNOWN grid-ON windows (observed act /
-    journal / write-confirmed fire — candidate F tier gate, ruling §14) is
+    journal / write-confirmed fire) is
     compensated to zero. A MEASURED (fill-derived) ON boundary is an
     INFERENCE, not a known label: there the raw net keeps the battery-out
     visible and the zeroed cell discloses it (measured_out) — never
-    withheld, never re-added. Solar-day (owner rule2026-10-21) = the
+    withheld, never re-added. Solar-day = the
     MEASURED window: first positive charge current (≥GG_FLOW_A) at/after
     calendar sunrise → last positive current before sunset — one solar day
     per calendar day, none on sunless days, no grid gating. All times
     rendered in TZ (site local).
 
-    QA ruling (owner2026-10-21): every aggregation/integration — boundary
+    Every aggregation/integration — boundary
     detection, window sums, latest values — is a CLUSTER request (OpenSearch
     aggregations via _msearch, see ENERGY_AGG); this function only declares
     windows and converts units. No local integration loops → no drift between
@@ -239,10 +238,10 @@ def fetch_gridguard() -> dict:
     else:
         day_start = now.replace(hour=GG_SOLARDAY_H, minute=0, second=0, microsecond=0)
     hist_start = day_start - timedelta(days=7)
-    # Owner bug order (2026-11-07): the OLDEST history
-    # row always rendered a leading "unlabelled" slice — every state-evidence
+    # the OLDEST history
+    # row would otherwise render a leading "unlabelled" slice — every state-evidence
     # query opened AT hist_start (the same 06:00 anchor the periods use), so
-    # the state that labels the first row's start (the pre-dawn fire ≈05:31 /
+    # the state that labels the first row's start (the pre-dawn fire /
     # the previous eve's switch) fell JUST behind the window, state_era
     # landed mid-row and the leading slice had no covering evidence. Evidence
     # now looks back GG_EVIDENCE_LOOKBACK_H behind the horizon; periods,
@@ -267,8 +266,7 @@ def fetch_gridguard() -> dict:
         except Exception:
             return None
 
-    # STATE EVIDENCE (owner ruling2026-10-22; hierarchy refined by owner
-    # ruling #10, 2026-10-26 — WINDOW TO BACK-END TRUTH): the history Actor
+    # STATE EVIDENCE: the history Actor
     # column, the compensation windows AND the hero's grid truth all come
     # from ONE merged, labelled timeline —
     #   1. successful switch acts (the system's own commands, verified)
@@ -282,14 +280,12 @@ def fetch_gridguard() -> dict:
     #      plan ideals render ONLY as labelled plan_marks, an unobserved
     #      off→on gap closes at the CLUSTER-measured first-positive intake
     #      (_measured_on_fill) or NOT AT ALL (absence rule). Dedicated
-    #      cluster queries over the WHOLE ledger horizon — owner QA lesson
-    #      2026-10-21: never buffer scans.
+    #      cluster queries over the WHOLE ledger horizon — never buffer scans.
     ev_src = ["ts", "event", "action", "result", "timer_action", "inputs"]
     act_hits = _gg_search(GG_EVENTS, {
         "size": 400, "sort": [{"ts": "asc"}],
-        # owner find 2026-10-24 ("loses data sets / not the current state"):
         # the size-400 ASC window silently cut the NEWEST events once the eve's
-        # ensure-on act spam (pre-collapse: one per FINAL tick) filled it —
+        # ensure-on act spam (one per FINAL tick) filled it —
         # today's switch acts never arrived and the actor column contradicted
         # the live hero. Labels only need STATE-CHANGING acts (switch + the
         # timer clears); failsafe/keep_grid acts carry no state.
@@ -342,11 +338,11 @@ def fetch_gridguard() -> dict:
     tier1_fires = _write_confirmed_fires(
         [h["_source"] for h in gen_hits], cancels, now, tz)
     evidence += [(t, "on") for t in tier1_fires]
-    # PLAN IDEALS → LABELLED CONTEXT ONLY (ruling #10): the newest NIGHT PLAN
+    # PLAN IDEALS → LABELLED CONTEXT ONLY: the newest NIGHT PLAN
     # announcement per night (later pushes supersede an un-passed earlier
     # one), anchored to its fire instant — passed anchors become plan_marks
-    # on the row containing them (_plan_marks_into), NEVER state evidence
-    # (the 08:44 bug). The ANNOUNCEMENT stays a historical fact even when
+    # on the row containing them (_plan_marks_into), NEVER state evidence.
+    # The ANNOUNCEMENT stays a historical fact even when
     # the morning drain disarmed the timer → no cancel filtering here.
     program = None                                 # (ts_push, fires_at|None)
     program_events = []                            # passed anchors (fires_at)
@@ -383,7 +379,7 @@ def fetch_gridguard() -> dict:
     # (runs/windows/state_era build AFTER day_bounds below — tier (2) needs
     #  the measured day starts first)
 
-    # B) latest forecast doc → kWh/m² (wire unit ruling: never Joules on screen)
+    # B) latest forecast doc → kWh/m² (never Joules on screen)
     weather = {"radiation_kwh_m2": None, "ts": None, "source": None}
     try:
         wx = _gg_search(GG_WEATHER, {"size": 1, "sort": [{"ts": "desc"}],
@@ -396,11 +392,11 @@ def fetch_gridguard() -> dict:
     except Exception:
         pass
 
-    # C) BMS energy — owner energy model: pack.current is the NET of solar-in
+    # C) BMS energy — pack.current is the NET of solar-in
     #    minus load-out (grid OFF: "5 in −12 out = −7 shown"; grid ON: loads
     #    ride the UPS → battery sees pure solar). One truth per period: the
-    #    SUM of all values — periods, not flicker lists. Per the owner QA
-    #    ruling (2026-10-21) NOTHING is integrated locally: boundaries and
+    #    SUM of all values — periods, not flicker lists. NOTHING is
+    #    integrated locally: boundaries and
     #    window sums are cluster queries (see ENERGY_AGG); this function only
     #    declares windows and converts units.
     # latest BMS doc → live card values (the cluster picks it, no local scan)
@@ -438,7 +434,7 @@ def fetch_gridguard() -> dict:
             return None, None
 
     # solar-day boundaries: AT MOST ONE solar day per calendar day, defined by
-    # the current curve (pack.current) alone — no grid gating (owner2026-10-21).
+    # the current curve (pack.current) alone — no grid gating.
     # The boundary is the first positive excursion (≥GG_FLOW_A) at or after
     # astronomical sunrise, and the last positive excursion before sunset.
     # A calendar day that never lifts above the threshold has NO solar day —
@@ -458,7 +454,7 @@ def fetch_gridguard() -> dict:
     for d in cand:
         sun_r, sun_s = _sun_times(d)
         if d == now.date():
-            # owner rule2026-10-23: the ONGOING day is final only at/after
+            # the ONGOING day is final only at/after
             # calendar sunset (mid-day cloud gaps must not close it)
             today_sunset = sun_s
         if sun_r is None or sun_s is None:
@@ -482,7 +478,7 @@ def fetch_gridguard() -> dict:
         a, b = day_bounds.get(d, (None, None))
         day_bounds[d] = (t, b) if direction == "asc" else (a, t)
     day_bounds = {d: ab for d, ab in day_bounds.items() if None not in ab}
-    # hierarchy tier (2) (owner ruling #10): close the off→on state gap the
+    # hierarchy tier (2): close the off→on state gap the
     # journal never observed at the CLUSTER-measured first-positive intake —
     # the render discloses measurement-derived starts via seg src="measured"
     # (tier-1 dominance: a gap a write-confirmed fire owns is NEVER filled)
@@ -512,10 +508,10 @@ def fetch_gridguard() -> dict:
             history_plan.append(("night", day_bounds[prev_d][1], a,
                                  {"sunless": (d - prev_d).days - 1}))
         _ongoing = (d == now.date() and today_sunset is not None
-                    and now <= today_sunset)          # owner rule2026-10-23
+                    and now <= today_sunset)          # not final before sunset
         history_plan.append(("day", a, b,
                              {"day": d.isoformat(), "running": _ongoing}))
-    # plan ideals as LABELLED context markers on their row (ruling #10)
+    # plan ideals as LABELLED context markers on their row
     _plan_marks_into(history_plan, programs)
 
     # current cards: the running period (day if inside measured window, else
@@ -526,9 +522,9 @@ def fetch_gridguard() -> dict:
     if dates:
         last_d = dates[-1]
         la, lb = day_bounds[last_d]
-        # owner rule2026-10-23: the ONGOING solar day is never closed by a
+        # the ONGOING solar day is never closed by a
         # mid-day cloud gap — it runs until CALENDAR SUNSET (its length is
-        # only final there; the provisional last-spike just trails). The old
+        # only final there; the provisional last-spike just trails). A
         # 10-minute-since-last-spike rule flipped any longer cloud into a
         # phantom mid-day SOLAR NIGHT row. The 10-minute rule survives only
         # as the fallback when today's sun times are unknown (API blip).
@@ -548,14 +544,14 @@ def fetch_gridguard() -> dict:
             cur_night = {"from": lb, "to": now, "running": True}
 
     # window energies: ONE batched cluster call. Per period up to THREE
-    # aggregations. Candidate F tier gate (owner ruling §14, 2026-10-26): the
-    # owner compensation rule — known grid-ON ⇒ battery-out is withheld from
-    # the net — rests on the label being KNOWN, so it applies only to KNOWN
-    # windows (observed act / journal / write-confirmed tier-1 fire). Under a
+    # aggregations. The compensation rule — known grid-ON ⇒ battery-out is
+    # withheld from the net — rests on the label being KNOWN, so it applies
+    # only to KNOWN windows (observed act / journal / write-confirmed
+    # tier-1 fire). Under a
     # MEASURED (fill-derived) window the "ON" is an inference from the solar
-    # ramp edge (forensic: Oct23 07:56Z was no switch — the day-boundary
-    # step, flickering back to discharge), so withholding there HID real
-    # battery-out: the raw net now stays visible in kwh and the zeroed cell
+    # ramp edge (a day-boundary step can flicker back to discharge), so
+    # withholding there HID real
+    # battery-out: the raw net stays visible in kwh and the zeroed cell
     # DISCLOSES the slice (measured_out, △ tier marker) instead of pretending.
     # Window tier is decided by its START (the boundary's source — exactly
     # what the actor column discloses as seg src="measured"); one window,
@@ -598,13 +594,12 @@ def fetch_gridguard() -> dict:
         held = -r.get("held", 0.0) * f or 0.0   # withheld: KNOWN windows only
         meas = -r.get("meas", 0.0) * f or 0.0   # disclosed: MEASURED windows
         # net = raw + withheld-known; the measured slice stays INSIDE the raw
-        # net (kwh) and is only disclosed — never re-added (§14 ii)
+        # net (kwh) and is only disclosed — never re-added
         tot = r.get("tot", 0.0) * f + held
         return round(tot, 3), round(held, 3), round(meas, 3)
 
     def _actor_segments(a, b):
-        """Actor column (owner spec2026-10-21/22; source hierarchy ruling #10
-        2026-10-26): clip the labelled grid-ON windows into the period [a, b).
+        """Actor column: clip the labelled grid-ON windows into the period [a, b).
         HONESTY RULE: labels exist only since the FIRST state evidence of the
         horizon (act, journal, write-confirmed program fire, measured gap
         fill) — everything before it is UNKNOWN (never inferred to OFF).
@@ -634,7 +629,7 @@ def fetch_gridguard() -> dict:
                        "to": s1.isoformat(timespec="minutes")}
                 if w0 < a:                         # ON began before the row
                     seg["since"] = w0.isoformat(timespec="minutes")
-                if w0 in measured_starts:          # ruling #10: disclose the fill
+                if w0 in measured_starts:          # disclose the fill
                     seg["src"] = "measured"
                 segs.append(seg)
                 cur = s1
@@ -646,7 +641,7 @@ def fetch_gridguard() -> dict:
     def _row_energy(a, b):
         """kwh + withheld (known windows) + the disclosure (measured windows).
         The disclosure key appears ONLY when there is something to disclose —
-        the wire shape of honest rows stays exactly what it was (§14 ii)."""
+        the wire shape of honest rows stays exactly what it was."""
         kwh, held, meas = _sum(a, b)
         out = {"kwh": kwh, "corrected": held}
         if meas:
@@ -662,12 +657,12 @@ def fetch_gridguard() -> dict:
         history.append(row)
     # the RUNNING night would otherwise be invisible in the table: a night row
     # only completes when the NEXT solar day starts (its "to" = that day's
-    # start). Append it explicitly, marked running (owner QA2026-10-21).
+    # start). Append it explicitly, marked running.
     # (A running DAY is already the partial today-row above — lb tracks the
     # last ≥GG_FLOW_A sample — so only the night needs this.)
     if cur_night and cur_night.get("running"):
         a, b = cur_night["from"], cur_night["to"]
-        run_extra = {}                             # plan marks (ruling #10)
+        run_extra = {}                             # plan marks
         _plan_marks_into([("night", a, b, run_extra)], programs)
         history.append({"kind": "night", "from": a.isoformat(timespec="minutes"),
                         "to": b.isoformat(timespec="minutes"), "running": True,
@@ -684,30 +679,30 @@ def fetch_gridguard() -> dict:
                 **_row_energy(p["from"], p["to"])}
 
     # D) plan: latest-of-kind cluster queries (size:1 each, batched) — never
-    #    scans of the recent buffer, which ages them out within hours (owner
-    #    QA lesson2026-10-21: eve verdict + night-need went silently blank).
+    #    scans of the recent buffer, which ages them out within hours (else
+    #    eve verdict + night-need go silently blank).
     #    The DECISION LOG below still uses the buffer by design: it IS the
     #    recent story.
     plan = {
         "eve": None, "night_need": None, "night_learned": None, "latest_emergency": None,
         "yield_learned": None, "yield_hist": [],
-        # owner REFERENCE-LOAD model (Phase A): the newest reference basis of
+        # the newest reference basis of
         # the crossing (event class reference_load) — newest-of-kind like the
         # plan queries; position matters: zip above maps bodies BY ORDER
         "reference_load": None,
-        # owner part4 (2026-10-26): UPS-mode layer — defaults; filled by the
+        # UPS-mode layer — defaults; filled by the
         # dedicated bounded queries BELOW (zip above stops at the body count)
         "reserve_tier_hist": [], "tier_hold": None,
     }
     plan_bodies = [
         # the last SWITCHING verdict: eve_* events (holds/suppressions with a
         # reason), a release (grid_off), the reserve-tier layer's switching
-        # decisions (owner part3 2026-10-25: grid_on = the tier stop, tier_hold
+        # decisions (grid_on = the tier stop, tier_hold
         # = release held below the tier — the enumeration must not hide them),
         # the eve's announcement (NIGHT PLAN push) or its timer programming
-        # (failsafe_timer act) — QA lesson 2026-10-22: the eve's own path
-        # audits NEITHER eve_* NOR grid_off, so the programmed night stayed
-        # invisible on the card
+        # (failsafe_timer act) — the eve's own path
+        # audits NEITHER eve_* NOR grid_off, so the programmed night would
+        # otherwise stay invisible on the card
         {"size": 1, "sort": [{"ts": "desc"}],
          "query": {"bool": {"should": [
              {"prefix": {"event": "eve_"}},
@@ -724,12 +719,12 @@ def fetch_gridguard() -> dict:
         {"size": 1, "sort": [{"ts": "desc"}],
          "query": {"term": {"event": "night_learned"}}},
         {"size": 1, "sort": [{"ts": "desc"}],
-         # owner2026-10-25: english-only event (low_capacity_on) + legacy docs
+         # english-only event (low_capacity_on) + legacy docs
          "query": {"bool": {"should": [{"term": {"event": "emergency_on"}},
                                        {"terms": {"event": ["low_capacity_on",
                                                             "ah_tief_on"]}}],
                             "minimum_should_match": 1}}},
-        # L1 yield learning (owner2026-10-22): newest learned factor (the
+        # L1 yield learning: newest learned factor (the
         # weather card shows its median over the last measured days) — same
         # newest-of-kind pattern as above, PLUS a size-10 history body
         {"size": 1, "sort": [{"ts": "desc"}],
@@ -737,7 +732,7 @@ def fetch_gridguard() -> dict:
         {"size": 10, "sort": [{"ts": "desc"}],
          "query": {"term": {"event": "yield_learned"}},
          "_source": ["ts", "inputs"]},
-        # owner REFERENCE-LOAD model (Phase A): the newest reference basis of
+        # the newest reference basis of
         # the crossing (night date + clips + Wh/h, or median_fallback) — the
         # payload renders it as the ONE compact last_ref display line
         {"size": 1, "sort": [{"ts": "desc"}],
@@ -750,7 +745,7 @@ def fetch_gridguard() -> dict:
         # body order) — the history body yields the full hit list
         plan[key] = ([h["_source"] for h in hits] if key == "yield_hist"
                      else (hits[0]["_source"] if hits else None))
-    # owner part4 (2026-10-26): UPS-mode layer (display only) — the LATCHED
+    # UPS-mode layer (display only) — the LATCHED
     # reserve tier for TODAY lives in the NEWEST reserve_tier event (tiers are
     # set at the eve for the COMING day and survive midnight); tier_hold = the
     # audit line of a release held below the tier (signature-guarded upstream,
@@ -758,7 +753,7 @@ def fetch_gridguard() -> dict:
     # ONE batched round-trip; a failed query must never break the page — the
     # same error netting as the act-trail below: empty list / None instead.
     #
-    # OWNER DIRECTIVE 2026-10-26 (no frontend value inventions): the SHARED
+    # No frontend value inventions: the SHARED
     # bad-solar reference and the history-note era resolve from BACKEND EVENTS
     # here too (third/fourth bodies of the same batch):
     #   ref_kwh ← reserve_tier.inputs.reference_kwh_m2 (the contract field —
@@ -766,8 +761,8 @@ def fetch_gridguard() -> dict:
     #             number on screen), else the eve release audit's
     #             grid_off.inputs.weather_min_j (Joules → kWh/m², unit
     #             conversion only), else None → the UI renders no number.
-    #   label_era ← the FIRST labelled evidence event ever (was a hardcoded
-    #             "20 Oct, 20:02" literal in the history note).
+    #   label_era ← the FIRST labelled evidence event ever (never a
+    #             hardcoded literal in the history note).
     ref_kwh = None
     label_era = None
     try:
@@ -822,7 +817,7 @@ def fetch_gridguard() -> dict:
 
     # decision log: the STORY, not the firehose — keep_grid and repeated
     # high-frequency audit kinds appear once (newest); pushes/acts/verdicts all
-    # owner part3 (2026-10-25): tier_hold can flip on every SOC crossing of the
+    # tier_hold can flip on every SOC crossing of the
     # reserve tier → newest line only; reserve_tier stays un-deduped (signature-
     # guarded upstream: one line per real decision change).
     high_freq = {"night_need", "night_learned", "night_profile", "night_buckets",
@@ -852,8 +847,7 @@ def fetch_gridguard() -> dict:
         res = str(last_start.get("result", ""))
         mode = "LIVE" if "dry_run=False" in res else ("DRY" if "dry_run=True" in res else None)
 
-    # state truth (owner ruling2026-10-22; sources per ruling #10 since
-    # b8776ee): the SAME merged evidence timeline as the history Actor
+    # state truth: the SAME merged evidence timeline as the history Actor
     # column — switch acts + observation journal + manual_override
     # detections + WRITE-CONFIRMED program fires (the device fires them
     # across the blackout by design; last-wins/cancel in
@@ -874,7 +868,7 @@ def fetch_gridguard() -> dict:
                       else max((b for a, b in windows), default=None))
     nni = (plan.get("night_need") or {}).get("inputs") or {}
     wx_kwh = weather.get("radiation_kwh_m2")
-    # owner REFERENCE-LOAD model (Phase A, display truth): ONE compact honest
+    # ONE compact honest
     # line (≤60 chars) for the basis the crossing is computed from — the
     # newest evaluated reference (clip night + measured Wh/h), else the
     # median fallback with the rate the eve actually used (night_need's own
@@ -890,7 +884,7 @@ def fetch_gridguard() -> dict:
             _label = f"{_WD[_rd.weekday()]} {_rd.day} {_MO[_rd.month - 1]}"
         except ValueError:
             _label = rl_in["night"][:12]
-        # owner rules 2026-11-12: RATE-first naming of the THREE tiers —
+        # RATE-first naming of the THREE tiers —
         # "full night" (tier1) / "clip" (tier2) / "held" (tier3, the last
         # value kept until new data arrives). The raw Wh of a fragment must
         # never render as "the night" (the projection only ever uses Wh/h).
@@ -905,7 +899,7 @@ def fetch_gridguard() -> dict:
         last_ref = (f"last_ref: median-fallback ({_rate:.0f} Wh/h)"
                     if isinstance(_rate, (int, float)) and not isinstance(_rate, bool)
                     else "last_ref: median-fallback")
-    # OWNER DIRECTIVE 2026-10-26: the shared reference is the payload value
+    # the shared reference is the payload value
     # ref_kwh resolved from the events above — None (no events / configured
     # away) means the UI renders NO reference number and NO gate verdict.
     gate_kwh = ref_kwh
@@ -917,28 +911,28 @@ def fetch_gridguard() -> dict:
         "grid_now": grid_now,
         "grid_since": grid_since.isoformat(timespec="minutes") if grid_since else None,
         "last_current_a": last_cur,
-        # owner order 2026-11-12: ACTOR REACHABILITY on the first card —
+        # ACTOR REACHABILITY on the first card —
         # filled by the dedicated newest-first reach query below; None =
         # no transition in the journal = the page renders NOTHING (never
         # inferred in either direction).
         "actor_reachable": None,
-        # owner's battery-capacity formula, LIVE from the newest BMS sample
+        # battery-capacity formula, LIVE from the newest BMS sample
         "battery_live": {"kwh": round(last_rem * last_pv / 1000.0, 3)
                          if last_rem is not None and last_pv is not None else None,
                          "soc": last_soc, "remaining_ah": last_rem,
                          "pack_v": last_pv},
         "planned_on_at": None, "planned_fires_at": None,
-        # display-truth doctrine (owner 2026-10-26): ANNOUNCED = the LAST
+        # display truth: ANNOUNCED = the LAST
         # write-confirmed programming (the newest result-ok ensure_on act
         # carrying its programmed time, queried below). ABSENCE RULE: no
         # such event in the journal (every historical day until tonight)
         # → None → the page shows NO announced time — it must NEVER fall
         # back to the plan ideal as if that were device-confirmed.
         "announced_on_at": None, "announced_fires_at": None,
-        # owner REFERENCE-LOAD model (Phase A): the crossing's basis line
+        # the crossing's basis line
         # (computed above; None = no reference event in the journal yet)
         "last_ref": last_ref,
-        # Phase B/C + D: the horizon's LABELLED source (night_need.onset_src)
+        # the horizon's LABELLED source (night_need.onset_src)
         # and the reference object's FULL truth (night, every clip window with
         # its hours, Wh, Wh/h, source clip|median_fallback). Absence rules:
         # no event/audit field → None — the page renders nothing it cannot
@@ -979,8 +973,9 @@ def fetch_gridguard() -> dict:
     decision["keep_grid_n"] = sum(
         1 for e in events if e.get("event") == "act"
         and (e.get("action") or {}).get("type") == "keep_grid")
-    # owner order 2026-11-12: ACTOR REACHABILITY — a DEDICATED newest-first
-    # query (the recent buffer ages out; F5 announces every transition once)
+    # ACTOR REACHABILITY — a DEDICATED newest-first
+    # query (the recent buffer ages out; every reach transition is announced
+    # once)
     # so the latch state NEVER goes stale-silent on the page. reach_restored
     # → True, reach_blocked → False, absence → None (honest nothing).
     try:
@@ -993,9 +988,9 @@ def fetch_gridguard() -> dict:
                                        else r_ev["event"] == "reach_restored")
     except Exception:
         decision["actor_reachable"] = None
-    # ANNOUNCED (owner doctrine 2026-10-26): the write-confirmed program —
+    # ANNOUNCED: the write-confirmed program —
     # a DEDICATED newest-first cluster query (the recent buffer ages out
-    # within hours — QA lesson 2026-10-21): act / failsafe_timer /
+    # within hours): act / failsafe_timer /
     # ensure_on, result ok, time-bearing inputs.fire_str (writer: apply_plan
     # records fire_str + at_local per write). Newest wins = the last write,
     # exactly what controls the actor (multi-write, last-wins). Absence
@@ -1017,10 +1012,10 @@ def fetch_gridguard() -> dict:
             if isinstance(fs, str) and re.fullmatch(r"\d{1,2}:\d{2}", fs):
                 decision["announced_on_at"] = fs
                 announced_src = _ts(src0)
-        # §31/§32 ANNOUNCED-CANCEL (owner ruling round, sanctioned): a LATER
+        # ANNOUNCED-CANCEL: a LATER
         # ok disable/clear act means the system itself DISARMED the program →
-        # the page must stop claiming it ("fires device-side, no WiFi needed"
-        # for a timer we just cleared = the two-truths class). Same semantic
+        # the page must stop claiming it (claiming "fires device-side, no
+        # WiFi needed" for a timer we just cleared = two-truths). Same semantic
         # the tier-1 history cancels already use (see _write_confirmed_fires):
         # strictly-after the newest write wins; `result ok` is re-checked
         # in-code beside the query filter (a refused cloud write never killed
@@ -1055,15 +1050,15 @@ def fetch_gridguard() -> dict:
         if ann_fires <= local_w:
             ann_fires += timedelta(days=1)
         decision["announced_fires_at"] = ann_fires.isoformat(timespec="minutes")
-    # PLAN IDEAL (owner doctrine 2026-10-26): the planner's own crossing —
+    # PLAN IDEAL: the planner's own crossing —
     # the time in the newest NIGHT PLAN push text (final_plan). An INTENT
     # figure rendered with its own label; the write-confirmed program is
-    # announced_on_at above. The old "armed act's own fields" source was
-    # the conflated bug (it claimed act inputs as the plan): with the writer
-    # now recording times it would re-label the WRITE as the plan ideal —
+    # announced_on_at above. The "armed act's own fields" source
+    # conflated the two (it claimed act inputs as the plan): with the writer
+    # recording times it would re-label the WRITE as the plan ideal —
     # the push (the planner's announcement) is the plan.
     # dedicated query — the recent buffer never even carries "kind" in its
-    # _source, so this fallback was silently dead (QA lesson2026-10-21)
+    # _source, so an in-buffer fallback would be silently dead
     plan_src = None
     push_hits = _gg_search(GG_EVENTS, {
         "size": 1, "sort": [{"ts": "desc"}],
@@ -1079,8 +1074,8 @@ def fetch_gridguard() -> dict:
     if decision["planned_on_at"] and plan_src is not None:
         # anchor the bare HH:MM to its NEXT occurrence after the source event —
         # an evening-armed 08:13 fires TOMORROW morning, and a timer that has
-        # already fired must EXPIRE from the plan card (owner QA2026-10-22:
-        # the card still advertised the fired 08:13 after the morning drain)
+        # already fired must EXPIRE from the plan card (else the card keeps
+        # advertising the fired 08:13 after the morning drain)
         hh, mm = (int(x) for x in decision["planned_on_at"].split(":"))
         local_src = plan_src.astimezone(tz)
         fires = local_src.replace(hour=hh, minute=mm, second=0, microsecond=0)
@@ -1095,9 +1090,8 @@ def fetch_gridguard() -> dict:
     day_per = _per(cur_day)
     # forecast chips compare the payload forecast against the payload
     # reference (both kWh/m²) — ref absent → gate_ok null → the chip renders
-    # "—" (owner directive: never invent the number)
-    # payload resilience (owner order 2026-11-02; doctrine fc61806 applied to
-    # the page side): a dead forecast dependency must never blank the payload —
+    # "—" (never invent the number)
+    # payload resilience: a dead forecast dependency must never blank the payload —
     # the page renders "forecast unavailable" for null and keeps every other
     # truth it already holds. Failures stay uncached (the next poll retries).
     try:
@@ -1122,8 +1116,8 @@ def fetch_gridguard() -> dict:
         "decisions": decisions,
         "decision": decision,
         "forecast3": forecast3,
-        # owner directive 2026-10-26: first labelled evidence, events only —
-        # the history note used to hardcode "20 Oct, 20:02"
+        # first labelled evidence, events only —
+        # never a hardcoded literal in the history note
         "label_era": label_era,
         "measured_today_kwh": day_per["kwh"] if day_per and day_per["today"] else 0.0,
     }

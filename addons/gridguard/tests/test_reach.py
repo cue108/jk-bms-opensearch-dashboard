@@ -20,7 +20,7 @@ def test_operstate_down_and_missing(tmp_path):
     assert operstate_up("a", sysfs_base="/definitely/missing") is False
 
 
-# --- owner2026-10-21: host50 has exactly ONE WiFi dongle — DISCOVER it -------------
+# --- host50 has exactly ONE WiFi dongle — discover it, never pin a name ---
 def test_reach_discovers_the_single_dongle(tmp_path):
     # the canonical wireless marker, never a pinned MAC-derived name (it rots on swap)
     (tmp_path / "wlx801f02c60130").mkdir()

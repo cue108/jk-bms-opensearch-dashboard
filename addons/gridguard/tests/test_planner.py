@@ -1,9 +1,9 @@
-"""v4 evening ratio planner (spec v4 §3/§6) — pure truth table + failsafe math.
+"""Evening ratio planner — pure truth table + failsafe math.
 
-v4 replaces the v3 empirical planner: the decision is the ONE ratio
+The decision is the ONE ratio
 `available >= SAFETY_FACTOR × need` (need = median Wh of CLEAN night buckets);
 t_fire is demoted from decision core to failsafe timer inside the learned
-night (spec §8: "t_fire as decision core → at most an info line").
+night ("t_fire as decision core → at most an info line").
 """
 from datetime import datetime, timedelta
 
@@ -26,9 +26,9 @@ NIGHT_LEN = 11.0                          # learned-night length passed by _eve
 
 kinds = lambda plan: [k for k, _ in plan.actions]
 
-# L2 wave1 (owner ruling 2026-10-25): floor_wh = SoC curve(TRUE_FLOOR_V) ×
-# full_ah × live pack_v — 1,5 % × 200 Ah × 25,6 V = 76,8 Wh (replaces the old
-# ah_on × pack_v = 128 Wh; the BMS counter is audit/display only now).
+# floor_wh = SoC curve(TRUE_FLOOR_V) ×
+# full_ah × live pack_v — 1,5 % × 200 Ah × 25,6 V = 76,8 Wh (the BMS counter
+# is audit/display only).
 FLOOR_PCT = 1.5                                        # kept as a plain fixture number (the table left the source)
 FLOOR_WH = 76.8                                         # fixture energy base @ _plan defaults
 
@@ -43,7 +43,7 @@ def _plan(available=1000.0, need=800.0, switch="off", night_len=NIGHT_LEN, c=cfg
 
 
 def test_failsafe_without_pack_voltage_is_not_guessed():
-    """Owner doctrine (2026-10-20): sensor data beats textbook constants — no
+    """Sensor data beats textbook constants — no
     pack voltage → no schedule is guessed; the conservative ON covers the
     night instead (never a phantom crossing, never an idle gamble)."""
     plan = _plan(available=1000.0, need=800.0, switch="off", pack_v=None)
@@ -64,9 +64,9 @@ def test_build_timer_shapes():
     assert off["do"] == {"switch": "off"} and off["atLocal"] == "0 8 * * *"
 
 
-# --- owner floor law 2026-11-13: the curve floor left the source --------------
+# --- the curve floor left the source -------------------------------------------
 def test_floor_follows_pack_voltage():
-    """Owner floor law 2026-11-13: OUTSIDE the UPS mode there is NO floor —
+    """OUTSIDE the UPS mode there is NO floor —
     the crossing does not consume the pack voltage anymore (same available,
     any pack_v → byte-identical raw crossing). INSIDE the UPS band the tier
     percent converts with full_ah × LIVE pack_v (night_floor_wh): higher
@@ -84,7 +84,7 @@ def test_floor_follows_pack_voltage():
     assert t_hi.actions[0][1]["at_local"] < t_lo.actions[0][1]["at_local"]
 
 
-# --- v5 (NORTH STAR §13): the NEED anchors every evening decision ------------------
+# --- the NEED anchors every evening decision -----------------------------------
 def test_unknown_need_or_available_stays_conservative():
     # unknown need / available / pack_v → never release, never schedule:
     assert kinds(_plan(available=None, need=800.0, switch="on")) == ["keep_grid"]
@@ -137,7 +137,7 @@ def test_case_on_available_unknown_reason_zahlenfrei():
 
 # --- case OFF: the crossing schedule -----------------------------------------------
 def test_case_off_schedule_math():
-    """Raw head (owner floor law 2026-11-13: no floor outside the UPS mode);
+    """Raw head (no floor outside the UPS mode);
     rate = safety × need ÷ night_len; the programmed ON fires at the crossing."""
     plan = _plan(available=100.0, need=100.0, switch="off")
     assert kinds(plan) == ["failsafe_timer"]
@@ -152,7 +152,7 @@ def test_case_off_schedule_math():
 
 def test_case_off_below_floor_waits_for_the_observation():
     # available 0 → head ≤ 0 = OUT of the middle band (raw law: only the BMS
-    # zeros leave the band) — owner final spec 2026-11-13: the plan WAITS for
+    # zeros leave the band) — the plan WAITS for
     # the cell-voltage observation (`voltage_floor_hit` → the emergency owns
     # the edge), never a rescue and never a dead past-timer
     plan = _plan(available=0.0, need=80.0, switch="off")
@@ -170,7 +170,7 @@ def test_case_off_beyond_horizon_battery_carries_all():
 def test_case_off_tiny_night_len_uses_min_rate():
     # night_len below 1 h → rate floors at need/1.0 (max(1.0, night_len));
     # raw head = 60 Wh → a half-hour span keeps the timer path alive
-    # (owner rules 2026-11-13: below the minimum span the plan rescues
+    # (below the minimum span the plan rescues
     # directly instead of programming)
     plan = _plan(available=60.0, need=100.0, switch="off", night_len=1.0)
     assert plan.actions[0][1]["at_local"] == NOW + timedelta(hours=60.0 / 120.0)
@@ -184,7 +184,7 @@ def test_hold_reason_wording_source():
     assert hold_reason(None, None, cfg) == "reason: night need not yet determinable"
 
 
-# --- §13 supersedes §9.1's EVE half: the forecast never gates the eve ---------------
+# --- the forecast never gates the eve ------------------------------------------
 def test_eve_forecast_never_gates_the_spend_or_schedule():
     # OFF + known need + bad forecast → the schedule runs (the gate = morning)
     assert kinds(_plan(available=100.0, need=100.0, switch="off",
@@ -212,7 +212,7 @@ def test_hold_reason_sun_line_when_ratio_held():
         == "reason: state of charge not yet determinable"
 
 
-# --- owner ruling 2026-10-25 (part 3): reserve tiers in the night plan ----------
+# --- reserve tiers in the night plan -------------------------------------------
 def _tier_plan(**kw):
     args = dict(available_wh=190.0, need_wh=100.0, switch_state="off",
                 night_len_hours=NIGHT_LEN, cfg=cfg, forecast_ok=True,
@@ -223,7 +223,7 @@ def _tier_plan(**kw):
 
 def test_reserve_floor_pct_raises_the_night_floor():
     """reserve_floor_pct (a BMS-SOC tier percent) is the ONLY floor outside
-    physics (owner floor law 2026-11-13): the planner works in Wh, the tier
+    physics: the planner works in Wh, the tier
     percent converts with the SAME full_ah × pack_v math (tier % is a BMS-SOC
     percent of the BMS capacity figure). Base (no tier): the RAW crossing;
     with the 30 % band the head clamps to zero = OUT of the band."""
@@ -252,14 +252,14 @@ def test_reserve_floor_none_or_zero_keeps_the_raw_crossing():
         assert plan.actions[0][1]["at_local"] == base.actions[0][1]["at_local"]
 
 
-# --- owner physics ruling 2026-11-12 (21:33 incident) ----------------------
+# --- programmed crossing from the reference rate when clean need is unknown ----
 def test_crossing_programmed_from_the_reference_rate_when_clean_need_unknown():
-    """21:33 incident: NO CLEAN night → need=None, but the reference RATE
-    (load_wh_h = the post-sunset grid-off clip mean Wh/h, Phase A) IS a need
+    """NO CLEAN night → need=None, but the reference RATE
+    (load_wh_h = the post-sunset grid-off clip mean Wh/h) IS a need
     basis — the evening gate must program its PROJECTED crossing into the
     actor (the existing t_fire = now + head/rate mechanism), never the
     conservative bring_on_now that the grid-off rule then suppresses to
-    NOTHING (the incident: suppressed every eve tick, NO timer programmed,
+    NOTHING (the failure mode: suppressed every eve tick, NO timer programmed,
     battery bleeding toward the floor with nothing armed)."""
     plan = _plan(available=190.0, need=None, switch="off", load_wh_h=100.0)
     assert kinds(plan) == ["failsafe_timer"]
@@ -272,22 +272,22 @@ def test_crossing_programmed_from_the_reference_rate_when_clean_need_unknown():
 def test_conservative_branch_when_neither_need_nor_rate_is_known():
     """The unknown-UNKNOWN case keeps the conservative ON (no invented
     number): need AND load_wh_h both absent → bring_on_now exactly as
-    before — the boundary the incident fix must not blur."""
+    before — the boundary this fix must not blur."""
     assert kinds(_plan(available=190.0, need=None, switch="off")) == ["bring_on_now"]
 
 
-# --- owner rulings 2026-11-13 (the live 21:00 → 21:10 flap) -----------------
+# --- minimum projected span (the 30-minute rule) --------------------------------
 def test_projection_under_thirty_minutes_keeps_the_grid_on():
-    """Owner rules 2026-11-13: (1) a forecast/plan SHORTER than 30 minutes
+    """(1) a forecast/plan SHORTER than 30 minutes
     must KEEP the grid ON state — releasing for a span the battery barely
-    covers only manufactures an ON → OFF → ON cycle (the live incident: ON
+    covers only manufactures an ON → OFF → ON cycle (the live failure: ON
     at 21:00 via the crossing, the eve released at 21:01 with the next
     crossing programmed at 21:10); (2) when the grid is ALREADY ON because
     the battery is too empty, the plans must not switch to GRID OFF
-    anymore — too-empty = a short projected span, so both rulings land on
+    anymore — too-empty = a short projected span, so both rules land on
     the same reality anchor: the projected grid-off span must reach
     cfg.release_min_span_min (30) minutes, measured against the LIVE
-    headroom and the reference rate. The §13 hour-long release stays."""
+    headroom and the reference rate. The hour-long release stays."""
     # need 1000 @ safety 1.2 / 11 h = 109.1 Wh/h → a 20 Wh raw head = ~11 min → KEEP
     short = _plan(available=20.0, need=1000.0, switch="on")
     assert kinds(short) == ["keep_grid"]
@@ -297,9 +297,9 @@ def test_projection_under_thirty_minutes_keeps_the_grid_on():
 
 
 def test_very_short_crossing_is_a_valid_clamped_timer_and_out_of_band_waits():
-    """Owner final spec 2026-11-13 (the inspection result): the tier/UPS band
+    """The tier/UPS band
     and the trivial `head ÷ rate` formula stay UNTOUCHED (raw head outside the
-    UPS — owner floor law 2026-11-13). The middle band's short crossing = a
+    UPS). The middle band's short crossing = a
     VALID honest timer (pre-programmed for the offline window —
     low_capacity_on is reach-gated), clamped to the NEXT cron minute so it
     can never land in the past (the dead 21:24:07-for-21:24 class). Only OUT
@@ -317,13 +317,13 @@ def test_very_short_crossing_is_a_valid_clamped_timer_and_out_of_band_waits():
     assert kinds(short) == ["failsafe_timer"]
 
 
-# --- owner DAY-OF-ACTION law 2026-11-14 (the UPS belongs to the forecast day) --
+# --- DAY-OF-ACTION: the UPS belongs to the forecast day -------------------------
 # Fixture: NOW = 20:10 on 10-18, need 800 @ safety 1.2 / 11 h = 87.27 Wh/h;
 # floor 50 % = 0.5 × 200 Ah × 25.6 V = 2560 Wh. available 3000 → under the
 # 50 % floor the crossing is 440 Wh ÷ 87.27 ≈ 5.04 h = 01:12 on 10-19
 # (after midnight); without a floor it is 34.4 h → beyond the 11 h horizon.
 def test_a_timer_firing_after_midnight_ignores_todays_storm_floor():
-    """The owner-flagged bug, pinned: the eve runs ON the storm day, but its
+    """The flagged bug, pinned: the eve runs ON the storm day, but its
     crossing lands on the NEXT (clean) day — a day-after UPS timer must NOT
     be programmed ("consider the day the actor acts and not the day the
     programming happens"). Contrast: without next-day information the OLD

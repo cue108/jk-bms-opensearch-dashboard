@@ -16,7 +16,7 @@ def test_dig_and_reading_parse():
     src._search = fake_search
     r = src.latest()
     assert r.min_cell_v == 3.19 and r.max_cell_v == 3.30 and r.charge_a == -1.75 and r.soc == 64.0
-    assert r.pack_v == 13.1                                # LIVE pack voltage (owner doctrine)
+    assert r.pack_v == 13.1                                # live pack voltage
 
 def test_samples_sorted_ascending_and_min_per_doc():
     docs = [

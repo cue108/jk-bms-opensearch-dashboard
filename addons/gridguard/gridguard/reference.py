@@ -1,9 +1,8 @@
-"""gridguard.reference — the owner's REFERENCE-LOAD model (Phase A, 2026-10-30).
+"""gridguard.reference — the REFERENCE-LOAD model.
 
-Owner ruling (the verdict behind this module): the CLEAN-median WHOLE-NIGHT
-total must NOT be the instantaneous law of the grid-RETURN crossing. The
-reference is the LOAD OF THE MOST RECENT POSSIBLE NIGHT, measured under
-laboratory conditions:
+The CLEAN-median WHOLE-NIGHT total must NOT be the instantaneous law of the
+grid-RETURN crossing. The reference is the LOAD OF THE MOST RECENT POSSIBLE
+NIGHT, measured under laboratory conditions:
 
 * the CALENDAR night = [weather sunset, next weather sunrise] — the SAME
   weather client path `deps.solar_night_windows`/the eve-onset fallback use
@@ -11,24 +10,21 @@ laboratory conditions:
 * clipped to GRID-OFF intervals — no sun input + no grid = the discharge is
   the pure house load. A mid-night grid switch is a KNOWN moment (the addon's
   own ok-confirmed journal writes) and CUTS the night into usable clip
-  segments — never a discard class ("the amount of data merely helps a better
-  mean — statistics, that's all": plain mean, no model machinery);
+  segments — never a discard class (plain mean over the clips, no model
+  machinery);
 * segment energy = (Ah_start − Ah_end) × the segment's mean pack V — the BMS
   per-minute counter, unit Wh/h is explicitly sanctioned;
 * each clip must be >= `min_clip_min` (default 30 min); a night's load =
   ΣWh ÷ Σhours over ITS qualifying clips. A still-running night (sunrise
   ahead) is never a candidate — the reference is always a COMPLETED night;
-* OWNER RULES 2026-11-12 (final form, 23:3x — always a RATE Wh/h, consulted
-  ONLY for the timer projection): the reference = the ASTRONOMICAL night
-  (sunset→sunrise, defined INDEPENDENTLY of the grid state) ∩ grid off, and
-  the candidates are RANKED BY THE COVERED GRID-OFF HOURS — "the more
-  hours we get here, the more accurate the load profile" (the whole
-  off-grid night = the max-hours case, NOT a separate class; the gapless
-  notion is dissolved for the measurement, `full` = display disclosure):
-  the freshness gate = the `n_nights` window (the owner's seven-day rule,
-  day7 inclusive); nothing in the window → the same hours-ranking at ANY
-  AGE (the winter rule: "the off-grid night we have right after
-  sunset");
+* the reference = the ASTRONOMICAL night (sunset→sunrise, defined
+  INDEPENDENTLY of the grid state) ∩ grid off, and the candidates are
+  RANKED BY THE COVERED GRID-OFF HOURS (more covered hours = a more accurate
+  load profile; the whole off-grid night = the max-hours case, NOT a
+  separate class; the gapless notion is dissolved for the measurement,
+  `full` = display disclosure): the freshness gate = the `n_nights` window
+  (seven days, day7 inclusive); nothing in the window → the same
+  hours-ranking at ANY AGE (e.g. the off-grid night right after sunset);
   tier3 = HOLD the last journaled clip value until new data arrives (the
     value WANDERS — every new measurement replaces it; grid-on nights learn
     NOTHING: the battery is isolated from the loads, no median of nothing);
@@ -48,7 +44,7 @@ _MIN_CLIP_RE = re.compile(r"\d{1,2}:\d{2}")   # fire_str contract (payload mirro
 
 
 def _aware(dt: datetime, tz: tzinfo) -> datetime:
-    """F5 doctrine: NAIVE timestamps are LOCAL wall-clock time (attach the tz);
+    """NAIVE timestamps are LOCAL wall-clock time (attach the tz);
     aware stamps convert into the reference tz."""
     if dt.tzinfo is None:
         return dt.replace(tzinfo=tz)
@@ -141,7 +137,7 @@ def _night_clips(sunset: datetime, sunrise: datetime, off_windows, samples,
 
     Per clip: boundary counter samples (last <= start, first >= end) give the
     Ah delta; the mean pack V over the clip's own samples converts it to Wh
-    (owner formula: segment Wh = ΔAh × V_mean). A clip is DISCARDED only when
+    (segment Wh = ΔAh × V_mean). A clip is DISCARDED only when
     it is too short, has no boundary/inside voltage evidence, or shows no
     discharge at all (ΔAh <= 0 — the pure-house-load premise is broken)."""
     clips = []
@@ -177,7 +173,7 @@ def _night_clips(sunset: datetime, sunrise: datetime, off_windows, samples,
 
 
 def _covers_night(sunset: datetime, sunrise: datetime, off_windows, tz) -> bool:
-    """TIER1 classifier (owner rules 2026-11-12): does the KNOWN grid-OFF
+    """TIER1 classifier: does the KNOWN grid-OFF
     timeline cover the WHOLE solar night [sunset, sunrise] without a gap?
     Any gap = grid-ON or UNKNOWN state inside the night → not a whole
     off-grid night (grid-on learns nothing: the battery is isolated from the
@@ -199,12 +195,12 @@ def _covers_night(sunset: datetime, sunrise: datetime, off_windows, tz) -> bool:
 
 def newest_reference(nights, off_windows, samples, *, now=None,
                      min_clip_min: float = 30.0) -> dict | None:
-    """THE HOURS-RANKED pick (owner ruling 2026-11-12, 23:3x). `nights` =
+    """THE HOURS-RANKED pick. `nights` =
     newest-first `(date, sunset, sunrise)` — one block at a time. The
     load-profile reference = the ASTRONOMICAL night (defined independently of
     the grid state) ∩ grid off, and the selection is ranked by the COVERED
-    GRID-OFF HOURS: "the more hours we get here, the more accurate is
-    the load profile" — the whole off-grid night is just the max-hours case,
+    GRID-OFF HOURS (more covered hours = a more accurate load profile) —
+    the whole off-grid night is just the max-hours case,
     NOT a separate class (the gapless notion is dissolved for the
     measurement; `full` stays a display disclosure only). Ties keep the
     NEWEST (nights come newest-first, the comparison is strictly greater).
@@ -243,11 +239,11 @@ def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
                    n_nights: int = 7, min_clip_min: float = 30.0,
                    history_fn=None,
                    max_lookback_days: int = 365) -> dict | None:
-    """THE THREE-TIER reference (owner rules 2026-11-12) — always a RATE
+    """THE THREE-TIER reference — always a RATE
     (Wh/h), consulted ONLY for the timer projection.
 
     Blocks of `n_nights` calendar nights, newest first: block0 = the
-    FRESHNESS window (the owner's seven-day rule, day7 inclusive — the +1
+    FRESHNESS window (seven days, day7 inclusive — the +1
     edge date; its hours-ranked candidate wins there); deeper blocks = the
     SAME hours-ranking at ANY AGE (bounded by `max_lookback_days`), visited
     only when the window is empty. The switch acts are
@@ -263,10 +259,9 @@ def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
     step = max(1, int(n_nights))
     # +1 = the window EDGE date: the night whose SUNSET sits exactly
     # `n_nights` days back must still be evaluated — day 7 is INCLUSIVE in
-    # the owner's rule ("if we have gone seven days without a value")
-    # and the currently-RUNNING night eats one slot otherwise
-    # (live find 2026-11-12: the day-7 full night fell just outside the
-    # block and a day-2 partial won).
+    # the seven-day rule and the currently-RUNNING night eats one slot
+    # otherwise (else the day-7 full night falls just outside the block
+    # and a shorter night wins).
     total = max(int(n_nights), int(max_lookback_days)) + 1
     _sun_memo: dict = {}
 
@@ -345,7 +340,7 @@ def reference_load(*, sun_times_fn, events_fn, series_fn, now, tz: tzinfo,
 
 
 def audit_inputs(ref: dict | None) -> dict:
-    """The `reference_load` event inputs (audit contract, scope 1): the night
+    """The `reference_load` event inputs: the night
     date, every clip window with its Wh and hours, the resulting Wh/h and the
     source — `median_fallback` whenever no reference exists (the caller then
     keeps the old median method)."""

@@ -21,7 +21,7 @@ def _health(events_result):
 def test_health_self_description_shape():
     h = _health(_tick_event(10))
     assert h["id"] == "gridguard"
-    assert h["title"] == "Energie Management"          # verbatim (spec §3.2)
+    assert h["title"] == "Energie Management"          # verbatim production title
     assert h["order"] == 20
     assert h["contract_version"] == 1
     assert h["version"] == webservice.VERSION

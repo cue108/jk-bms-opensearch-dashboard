@@ -1,5 +1,5 @@
-"""Owner bug order (2026-11-07): the FIRST (oldest) period-history row
-always rendered a leading ``unlabelled`` slice in the ACTOR column.
+"""Bug pin: the FIRST (oldest) period-history row always rendered a leading
+``unlabelled`` slice in the ACTOR column.
 
 Root cause (structural, not data): every state-evidence query opened at
 ``hist_start`` (the fixed 06:00 anchor, 7 days back) — the same instant the

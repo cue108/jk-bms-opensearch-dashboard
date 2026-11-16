@@ -42,18 +42,18 @@ def test_off_solar_matrix():
     assert off_solar_ok(None, [15.0], cfg) is False           # unknown → no grid-off (R8')
     assert off_solar_ok(12.0, [15.0, None], cfg) is False     # unknown sample blocks grid-off
 
-# §13 v7 RETIRED: test_off_soc_matrix — off_soc_ok (the static SOC gate) is gone;
+# RETIRED: test_off_soc_matrix — off_soc_ok (the static SOC gate) is gone;
 # the day drains above the floor, the reserve returns later as a LEARNED value (L1-L3).
 
 # v3 R3'': test_project_remaining (fixed night-load trajectory) — SUPERSEDED by
 # learn.t_fire; pins live in tests/test_learn.py::test_t_fire_math.
 
 
-# --- L2 wave 1 (owner ruling 2026-10-25, option 1: voltage-only floor) -------
+# --- voltage-only floor (the corrected worst-cell floor) -----------------------
 def test_corrected_min_cell_v_sign_convention():
     """Ingest sign: current > 0 = CHARGING (+chg/−dsg). The correction removes
     the charge over-voltage and adds back the discharge sag — verified against
-    the live 2026-10-25 data: loaded 3.234 V at −7 A → corrected 3.269 V."""
+    live data: loaded 3.234 V at −7 A → corrected 3.269 V."""
     cfg = load_config(GOOD)
     # discharge: sag is ADDED BACK → corrected is HIGHER than measured
     assert corrected_min_cell_v(3.234, -7.0, cfg) == pytest.approx(
@@ -67,7 +67,7 @@ def test_corrected_min_cell_v_sign_convention():
 
 
 def test_voltage_floor_hit_is_the_only_capacity_trigger():
-    """Owner ruling: the BMS counter is display-only; the corrected worst-cell
+    """The BMS counter is display-only; the corrected worst-cell
     voltage owns the floor. Deep backstop (2.90 V) stays independent."""
     cfg = load_config(GOOD)
     # healthy rested-equivalent band → NO hit (counter may say 2 % — irrelevant)
@@ -80,9 +80,9 @@ def test_voltage_floor_hit_is_the_only_capacity_trigger():
     assert voltage_floor_hit(None, 0.0, cfg) is True
 
 
-# --- owner ruling 2026-10-25 (part 3): weather-conditional RESERVE TIERS -------
+# --- weather-conditional RESERVE TIERS -----------------------------------------
 # Pure trigger logic over the rolling outlook.days window (weather.py l3
-# writer). Instrument carve-out (owner, binding): tier comparisons use BMS SOC
+# writer). Instrument carve-out (binding): tier comparisons use BMS SOC
 # — the mid-band tier gates compute in BMS SOC percent, the DEEP/Emergency
 # floors stay corrected cell voltage (unchanged).
 NEED_WH = 2000.0            # learned CLEAN night need (wh) — eve's own median
@@ -113,7 +113,7 @@ def test_reserve_tier2_gust_boundary():
 
 
 def test_reserve_tier2_rain_intensity_boundary():
-    # Owner ruling 2026-11-03 (METRIC SWITCH): the severe rain leg reads the
+    # METRIC SWITCH: the severe rain leg reads the
     # day's MAX HOURLY intensity (mm/h), NOT the daily sum —
     # TIER2_INTENSITY_MMH (default 25.0, DWD-anchored extreme class) fires
     # AT the knob (>=).
@@ -123,9 +123,9 @@ def test_reserve_tier2_rain_intensity_boundary():
 
 
 def test_reserve_tier2_daily_sum_no_longer_fires_the_rain_leg():
-    # The puddle is dead (owner: "extreme weather, not the threat of a
+    # The puddle is dead ("extreme weather, not the threat of a
     # puddle"): a big DAILY sum spread over the day (low hourly rate) must
-    # NOT raise the severe tier —26.6 mm on2026-11-01 was such a day.
+    # NOT raise the severe tier — 26.6 mm on one such day did not.
     assert reserve_tier([_day(precip_sum_mm=60.0, intensity_max_mmh=4.0)],
                         cfg) == (0, [])
     # unknown intensity → honest unknown (the daily sum claims nothing)
@@ -141,7 +141,7 @@ def test_reserve_tier2_only_counts_days_inside_the_lookahead_window():
 
 
 def test_reserve_tier1_fires_on_two_consecutive_low_solar_days():
-    # owner correction 2026-10-25: "low solar" = the weather API's OWN radiation
+    # "low solar" = the weather API's OWN radiation
     # below the SAME reference the weather card shows (WEATHER_MIN_J) — 10e6 J
     # (2.78 kWh/m²) < 15e6 J reference = a low day; two IN A ROW → tier 30
     rc = replace(cfg, weather_min_j=15e6)
@@ -156,15 +156,14 @@ def test_reserve_tier1_fires_on_two_consecutive_low_solar_days():
 
 
 def test_reserve_tier1_holds_on_any_below_reference_day_in_the_window():
-    """OWNER RULING 2026-11-09 (bug order, the 00:09 release): "We cannot
-    leave the UPS mode on a bad weather day — it exists to bridge a possible
-    grid outage ON a bad weather day." The tier therefore COUNTS the
-    below-reference days ANYWHERE in the window (any bad day holds); the old
-    longest-CONSECUTIVE-run rule released at 00:09 with the real window
+    """The UPS mode must not release ON a bad weather day — it exists to
+    bridge a possible grid outage ON such a day. The tier therefore COUNTS
+    the below-reference days ANYWHERE in the window (any bad day holds); the
+    old longest-CONSECUTIVE-run rule released at 00:09 with the real window
     1.06 / 2.94 / 0.54 kWh/m² vs ref 2.222 — the good middle day broke the
     run while two of three days stayed below reference."""
     rc = replace(cfg, weather_min_j=2.222e6)
-    # the REAL 2026-11-09 00:09 outlook: bad / good / bad → MUST hold 30
+    # bad / good / bad outlook → MUST hold 30
     tier, trig = reserve_tier(
         [_day(radiation_sum_j=1.06e6),
          _day(date="2026-11-10", radiation_sum_j=2.94e6),
@@ -208,8 +207,8 @@ def test_reserve_tier2_outranks_tier1_max_wins():
 def test_reserve_tier_empty_or_short_outlook_is_zero():
     assert reserve_tier([], cfg) == (0, [])
     assert reserve_tier(None, cfg) == (0, [])
-    # a single below-ref day now HOLDS the mode (owner ruling 2026-11-09:
-    # any bad weather day in the window keeps the reserve)
+    # a single below-ref day already HOLDS the mode (any bad weather day in
+    # the window keeps the reserve)
     assert reserve_tier([_day(radiation_sum_j=10e6)],
                            replace(cfg, weather_min_j=15e6))[0] == 30
     # junk/None entries are tolerated, never a guessed trigger
@@ -217,7 +216,7 @@ def test_reserve_tier_empty_or_short_outlook_is_zero():
 
 
 def test_active_tier_on_is_the_forecast_day_only():
-    """Owner DAY-OF-ACTION law 2026-11-14: the ENFORCEMENT tier is the one of
+    """DAY-OF-ACTION law: the ENFORCEMENT tier is the one of
     the day the bad-weather forecast is FOR — the storm day itself, never the
     day after. Not-covered date / non-list outlook = honest None (the caller
     keeps the conservative latch fallback), never a guessed tier."""

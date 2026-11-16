@@ -43,7 +43,7 @@ class TestForward(unittest.TestCase):
             s.shutdown()
 
     def test_page_served_from_cache_when_addon_goes_down(self):
-        """Spec §3.3: the framed page must not blank on a brief outage —
+        """The framed page must not blank on a brief outage —
         cache is last-good HTML keyed by health version; payload never caches."""
         s = _html_srv(b"<html>GOOD</html>"); h1 = FakeHandler(); h2 = FakeHandler()
         g = _gw_tmp(("demo", f"http://127.0.0.1:{s.server_address[1]}"))

@@ -1,6 +1,6 @@
-"""R5' reachability truth: the host's WLAN association. Device uplink = single gate.
+"""Reachability truth: the host's WLAN association. Device uplink = single gate.
 
-owner config-doctrine (2026-10-21): a config may hold only what does NOT change —
+Config doctrine: a config may hold only what does NOT change —
 ssid, password, identity keys. Interface names, MACs and USB ports are MOMENTARY
 STATES: the software must discover them itself (replace the dongle, move the port,
 nothing restarts, nothing hard-fails, the actor access never crashes on a stale

@@ -31,21 +31,20 @@ class Config:
     bms_current_path: str
     wlan_iface: str
     thresh_deep: float
-    true_floor_v: float             # owner ruling 2026-10-25 (option 1): the
-                                    # VOLTAGE-anchored operational floor (corrected
+    true_floor_v: float             # the VOLTAGE-anchored operational floor (corrected
                                     # rested-equivalent min cell, V); BMS counter
                                     # is display-only from here on
     r_cell_ohm: float               # DC-path cell R for the IR correction — derived
-                                    # from live data (35 mV @ 7 A, 2026-10-25), NOT
+                                    # from live data (35 mV @ 7 A), NOT
                                     # the app's AC-pulse figure (over-corrects ~7×)
     ah_off: float
     solar_off_a: float
     solar_hold_s: int
     solar_noise_a: float
-    safety_factor: float             # v4 §3: evening ratio margin (available >= SAFETY × need)
+    safety_factor: float             # evening ratio margin (available >= SAFETY × need)
     flow_a: float                 # solar-day boundary threshold (A) — mirror of
-                                  # GG_FLOW_A in gridguard/web_payload.py (single source — moved out of the frontend); owner2026-10-22: 3.0
-    forecast_refresh_min: float   # owner2026-10-23: forecast REVISION path — how
+                                  # GG_FLOW_A in gridguard/web_payload.py (single source); default 3.0
+    forecast_refresh_min: float   # forecast REVISION path — how
                                   # often the midday-changed open-meteo value is
                                   # re-fetched/shipped (value-id = revision chain)
     hist_days: int
@@ -66,46 +65,43 @@ class Config:
     weather_lat: float | None
     weather_lon: float | None
     weather_min_j: float | None
-    events_index: str                # §10b Decision-Index: dual-write index prefix
-    events_index_enabled: bool       # §10b kill-switch: EVENTS_INDEX=0 → jsonl-only
-    weather_index: bool              # §12.1 forecast dual-write: WEATHER_INDEX=0 → no weather docs
-    weather_index_prefix: str        # §12.1 forecast index prefix (…-{YYYY.MM.DD})
+    events_index: str                # audit event dual-write index prefix
+    events_index_enabled: bool       # kill-switch: EVENTS_INDEX=0 → jsonl-only
+    weather_index: bool              # forecast dual-write: WEATHER_INDEX=0 → no weather docs
+    weather_index_prefix: str        # forecast index prefix (…-{YYYY.MM.DD})
 
-    # --- owner ruling 2026-10-25 (part 3): weather-conditional RESERVE TIERS ---
+    # --- weather-conditional RESERVE TIERS ---
     # POLICY constants (config doctrine: thresholds are ENV-tunable policy —
-    # the owner may retune them; they are NOT observations). Instrument: the
+    # they may be retuned; they are NOT observations). Instrument: the
     # tier comparisons run on BMS SOC (verdict.reserve_tier carve-out) — the
     # deep/emergency floors keep corrected cell voltage, untouched below.
     tier1_days: int                  # outlook days with radiation_sum_j BELOW
                                      # the weather card's own reference
-                                     # (WEATHER_MIN_J — owner correction 2026-10-25:
-                                     # the harvest-vs-need variant is dead) —
+                                     # (WEATHER_MIN_J; the harvest-vs-need
+                                     # variant is dead) —
                                      # COUNTED ANYWHERE in the window: any bad
-                                     # day holds the mode (owner ruling
-                                     # 2026-11-09: the UPS exists to bridge a
-                                     # possible grid outage ON a bad weather
-                                     # day) → the 30 % moderate tier (default 1)
+                                     # day holds the mode (the UPS exists to
+                                     # bridge a possible grid outage ON a bad
+                                     # weather day) → the 30 % moderate tier (default 1)
     tier2_wmo_code: int              # severe 50 % tier: any outlook day with
                                      # weather_code >= this (95 = WMO thunderstorm)
     tier2_gust_kmh: float            # severe tier: day gust maximum STRICTLY above
     tier2_intensity_mmh: float       # severe tier: day's MAX HOURLY rain rate
-                                     # at/above (>=), mm/h — owner ruling
-                                     # 2026-11-03 (metric switch): "extreme
-                                     # weather, not a puddle"; default 25 =
+                                     # at/above (>=), mm/h — extreme-weather
+                                     # intensity, not accumulated volume; default 25 =
                                      # DWD's upper warning class. Replaces the
                                      # daily-sum knob TIER2_PRECIP_MM (retired)
     tier_lookahead_days: int         # how many outlook.days entries count (default 3)
-    tier_release_hyst_pct: int       # owner 2026-10-25 (anti-flap refinement of the
-                                    # confirmed shallow band): release needs
+    tier_release_hyst_pct: int       # anti-flap: release needs
                                     # soc >= tier + hyst so the >= release and the
                                     # <= stop zones never overlap at an exact
                                     # integer-SOC plateau (write churn); POLICY,
                                     # env-tunable, 0 = literal exact reach
 
-    # --- owner REFERENCE-LOAD model (Phase A2026-10-30; THREE-TIER rules
-    # 2026-11-12): a RATE (Wh/h) used only for the timer projection.
+    # --- REFERENCE-LOAD model (THREE-TIER rules): a RATE (Wh/h) used only
+    # for the timer projection.
     # reference_nights = the tier1 PREFERENCE WINDOW (a whole off-grid solar
-    # night wins within these days — the owner's seven-day rule) AND the deep
+    # night wins within these days — the seven-day rule) AND the deep
     # walk's block size; reference_min_clip_min = the minimum qualifying
     # grid-OFF clip length; reference_max_lookback_days = the age-unlimited
     # tier2 search bound (winter: older post-sunset values still count — the
@@ -114,16 +110,16 @@ class Config:
     reference_nights: int = 7
     reference_min_clip_min: int = 30
     reference_max_lookback_days: int = 365
-    # owner rulings 2026-11-13 (the live 21:00 → 21:10 flap): a plan whose
+    # a plan whose
     # projected grid-off span is SHORTER than this many minutes keeps the
     # GRID ON state (no release); the "grid is ON because the battery is too
-    # empty → no plan may switch to OFF" ruling shares the same anchor —
+    # empty → no plan may switch to OFF" rule shares the same anchor —
     # too-empty = a short projected span. Minutes.
     release_min_span_min: int = 30
 
     @property
     def tz_name(self) -> str:
-        """IANA name of `tz` — the §12.1 ship_forecast builds its ZoneInfo from it."""
+        """IANA name of `tz` — ship_forecast builds its ZoneInfo from it."""
         return str(self.tz)
 
 
@@ -149,9 +145,9 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
     if not (window_start < window_end):
         raise ConfigError("WINDOW_START must be earlier than WINDOW_END (no midnight wrap)")
     eve_start = _ptime("EVE_START", e.get("EVE_START", "20:00"))
-    # owner2026-10-25: the ACTOR's WiFi-outage hours (Data-QA doctrine: inside
-    # this window NO path to the actor exists — the floor functions must know
-    # owner2026-10-25 (DYNAMIC ruling): NO blackout knobs — a usage-variable
+    # the ACTOR's WiFi-outage hours: inside
+    # this window NO path to the actor exists — the floor functions must know.
+    # NO blackout knobs — a usage-variable
     # parameter (the WiFi schedule) is NEVER env; the live link is the truth.
 
     def fnum(name: str, default: str) -> float:
@@ -168,7 +164,7 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
 
     wj_raw = e.get("WEATHER_MIN_J", "").strip()
     wj = None if wj_raw in ("", "disabled") else fnum("WEATHER_MIN_J", wj_raw)
-    # final-review F4 (§12.1 safety gate): only a real positive finite number is
+    # forecast safety gate: only a real positive finite number is
     # a threshold — 0/negative/nan/inf end as the conservative unset (None =
     # gate closed), never as an open gate or a "≥ nan MJ" reason.
     if wj is not None and not (math.isfinite(wj) and wj > 0):
@@ -182,22 +178,22 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         bms_current_path=e.get("BMS_CURRENT_PATH", "pack.current"),
         wlan_iface=e.get("WLAN_IFACE", ""),   # "" = auto-discover the (single) dongle — reach.discover_wlan
         thresh_deep=fnum("THRESH_DEEP", "2.90"),
-        true_floor_v=fnum("TRUE_FLOOR_V", "3.15"),   # owner ruling2026-10-25
+        true_floor_v=fnum("TRUE_FLOOR_V", "3.15"),   # voltage-anchored floor
         r_cell_ohm=fnum("R_CELL_OHM", "0.005"),      # DC-path, live-derived
         ah_off=fnum("AH_OFF", "10"),
         solar_off_a=fnum("SOLAR_OFF_A", "10"),
         solar_hold_s=int(e.get("SOLAR_HOLD_S", "300")),
         solar_noise_a=fnum("SOLAR_NOISE_A", "2.0"),
-        safety_factor=fnum("SAFETY_FACTOR", "1.0"),   # owner deep-drain ruling2026-10-22:
-        # the ×1.2 used to ride in the crossing RATE → the return fired at ~29 %
+        safety_factor=fnum("SAFETY_FACTOR", "1.0"),   # the ×1.2 used to ride in
+        # the crossing RATE → the return fired at ~29 %
         # SOC (wasted harvest room). Default now the RAW learned need — the
         # battery carries whenever the median fits; the timer fires only when
         # the night proves worse. Insurance = the accepted physical backstop
         # (0 % BMS ≈ real end 3 V/cell ≈ 12 V pack). Env can still override.
         flow_a=fnum("FLOW_A", "3.0"),   # mirror of GG_FLOW_A in gridguard/web_payload.py —
-        # change BOTH together (owner solar-day rule, periods.py docstring)
-        forecast_refresh_min=fnum("FORECAST_REFRESH_MIN", "30"),  # owner2026-10-23
-        hist_days=int(e.get("HIST_DAYS", "7")),      # v3 R3'': rolling learning window
+        # change BOTH together (the solar-day rule, periods.py docstring)
+        forecast_refresh_min=fnum("FORECAST_REFRESH_MIN", "30"),  # forecast revision cadence (min)
+        hist_days=int(e.get("HIST_DAYS", "7")),      # rolling learning window
         bms_remaining_path=e.get("BMS_REMAINING_AH_PATH", "soc.remaining_ah"),
         ew_email=e["EWCLOUD_EMAIL"], ew_pass=e["EWCLOUD_PASS"], ew_cc=e.get("EWCLOUD_CC", "+34"),
         sw_deviceid=e["SW_MAIN_DEVICEID"], sw_devicekey=e["SW_MAIN_DEVICEKEY"], sw_ip=e["SW_MAIN_IP"],
@@ -211,15 +207,15 @@ def load_config(env: Mapping[str, str] | None = None) -> Config:
         events_index_enabled=e.get("EVENTS_INDEX", "1") != "0",
         weather_index=e.get("WEATHER_INDEX", "1") != "0",
         weather_index_prefix=e.get("WEATHER_INDEX_PREFIX", "gridguard-weather"),
-        # reserve tiers (owner ruling2026-10-25 part 3): POLICY thresholds, env-tunable
+        # reserve tiers: POLICY thresholds, env-tunable
         tier1_days=int(e.get("TIER1_DAYS", "1")),
         tier2_wmo_code=int(e.get("TIER2_WMO_CODE", "95")),
         tier2_gust_kmh=fnum("TIER2_GUST_KMH", "75"),
-        tier2_intensity_mmh=fnum("TIER2_INTENSITY_MMH", "25"),   # owner 2026-11-03
+        tier2_intensity_mmh=fnum("TIER2_INTENSITY_MMH", "25"),   # peak hourly rate (mm/h)
         tier_lookahead_days=int(e.get("TIER_LOOKAHEAD_DAYS", "3")),
-        # owner 2026-11-09: band 30/35 (was 30/32) — release needs tier + 5
+        # release needs tier + hyst (default 5)
         tier_release_hyst_pct=int(e.get("TIER_RELEASE_HYST_PCT", "5")),
-        # reference-load model (Phase A + tier rules 2026-11-12): tier1
+        # reference-load model: tier1
         # preference window (= block size) + clip floor + the deep tier2 cap
         reference_nights=int(e.get("REF_NIGHTS", "7")),
         reference_min_clip_min=int(e.get("REF_MIN_CLIP_MIN", "30")),

@@ -317,12 +317,22 @@ REF_CLIP = {"night": "2026-10-29", "source": "clip", "wh_h": LOAD_REF,
                        "wh": 1294.5, "hours": 9.7333}]}
 
 
+# cluster truth for the fixture nights — the shape ship_outlook carries
+# (next local days, benign codes, radiation above the reference → tier 0)
+CLUSTER_DAYS = [{"date": d, "weather_code": 3, "radiation_sum_j": 20_000_000.0}
+                for d in ("2026-10-29", "2026-10-30", "2026-10-31")]
+
+
 class NightDeps:
-    """Minimal NIGHT-phase deps: read/act surface of the re-estimation step."""
+    """Minimal NIGHT-phase deps: read/act surface of the re-estimation step.
+
+    `outlook=True` serves the CLUSTER outlook copy (owner rule 2026-11-15:
+    timer data always from OpenSearch); `outlook=False` = the cluster unknown
+    (kill-switch / no doc / down)."""
 
     def __init__(self, ref=None, reachable_flag=True, switch="off",
                  timers=None, remaining_ah=17.9625, pack_v=REF_PACK_V,
-                 v_avg=REF_PACK_V, full_ah=REF_FULL_AH):
+                 v_avg=REF_PACK_V, full_ah=REF_FULL_AH, outlook=True):
         self.ref, self.reachable_flag = ref, reachable_flag
         self.switch = switch
         self.timers = list(timers) if timers is not None else [ON_TIMER_0414]
@@ -331,6 +341,12 @@ class NightDeps:
         self.audits, self.pushes = [], []
         self.applied, self.reads, self.bms_calls = [], 0, 0
         self.reachable_calls = 0
+        self._with_outlook = outlook
+
+    def outlook_days(self):
+        if not self._with_outlook:
+            return None, None
+        return list(CLUSTER_DAYS), "2026-10-29T21:00:00+01:00"
 
     def audit(self, event, **f): self.audits.append((event, f))
     def push(self, title, text): self.pushes.append((title, text))
@@ -466,18 +482,62 @@ def test_eve_and_final_phases_never_run_the_night_resolve_step():
     assert _night_audit(deps) == []            # … but night_resolve is NIGHT-only
 
 
+def test_night_without_cluster_outlook_never_touches_the_timer():
+    """OWNER RULE 2026-11-15 (TIMER TRUTH): the re-estimation's floor data
+    comes from the OpenSearch outlook copy; cluster unknown → NO floor may be
+    invented → NO write at all — the armed timer stays untouched (the latch
+    fallback armed 01:41 on 2026-11-15 instead of the raw-head 07:0x)."""
+    deps = NightDeps(ref=dict(REF_CLIP), remaining_ah=718.5 / REF_PACK_V,
+                     outlook=False)
+    st = AppState()
+    tick(cfg, st, deps, _at(30, 2, 0))
+    assert deps.applied == []
+    assert _night_audit(deps) == []
+
+
+def test_active_tier_day_reads_the_cluster_day_and_never_the_latch():
+    """The timer path's per-day tier: cluster day-view when covered, honest
+    None otherwise — a stale window latch may never leak into it."""
+    from gridguard.main import _active_tier_day
+    st = AppState()
+    st.reserve_tier_pct = 50                   # stale latch from a window
+    covered = NightDeps()
+    assert _active_tier_day(cfg, covered, date(2026, 10, 30)) == 0
+    empty = NightDeps(outlook=False)
+    assert _active_tier_day(cfg, empty, date(2026, 10, 30)) is None
+    assert _active_tier_day(cfg, empty, date(2026, 12, 31)) is None  # uncovered
+    assert st.reserve_tier_pct == 50           # read-only: the latch is untouched
+
+
+def test_eve_timer_never_inherits_a_stale_window_latch():
+    """OWNER RULE 2026-11-15: the eve's PROGRAMMED floor comes from the
+    cluster day-view (unknown → plan_evening's old raw-head behavior) — a
+    stale 50 % window latch may never reprogram the crossing."""
+    st = AppState()
+    st.reserve_tier_pct = 50                   # stale latch from a window
+    deps = RefDeps(switch="off", buckets=list(NEED300), remaining_ah=AH400,
+                   ref={"night": "2026-10-17", "source": "clip", "wh_h": LOAD_REF,
+                        "wh": 1200.0, "clips": [], "min_clip_min": 30.0})
+    tick(cfg, st, deps, D(20, 10))
+    expected = D(20, 10) + timedelta(hours=AV400 / (LOAD_REF * 1.2))
+    assert _eve_fire(deps) == expected
+
+
 def test_night_resolve_docstring_states_the_true_operating_window():
-    """Review F1/F2 (documentation scoping, no model change): the docstring
-    must state where the step REALLY runs — the pre-blackout NIGHT tail plus
-    the blackout-recovery contact windows, with the EVE consult named as the
-    anti-drift workhorse of normal nights — and must NOT claim the emergency
-    floor-watch sits above this step (it belongs to the awake phases below
-    the NIGHT branch, which returns before reaching it)."""
+    """Documentation scoping, no model change: the docstring must state the
+    step's REAL operating window — the night-only phase scope (pre-blackout
+    tail plus blackout-recovery contact windows), with the EVE consult named
+    as the anti-drift workhorse of normal nights and blackout hands-off (reach
+    down → nothing happens) — and must NOT claim the emergency floor-watch
+    sits above this step (it belongs to the awake phases below the NIGHT
+    branch, which returns before reaching it)."""
     low = (_night_resolve.__doc__ or "").lower()
-    assert "pre-blackout tail" in low              # F1: the ~22:00–23:00 window
-    assert "recovery" in low                       # F1: the recovery path
-    assert "workhorse" in low and "eve" in low     # F1: the eve consult is named
-    assert "runs above this step unchanged" not in low   # F2: the false claim
+    assert "night phase only" in low              # night-only operating window
+    assert "pre-blackout tail" in low             # the ~22:00–23:00 window
+    assert "blackout recovery" in low             # the recovery path
+    assert "workhorse" in low and "eve" in low    # the eve consult is named
+    assert "reach down" in low and "nothing happens" in low   # blackout hands-off
+    assert "runs above this step unchanged" not in low   # never the false claim
 
 
 # ---------------------------------------------------------------------------

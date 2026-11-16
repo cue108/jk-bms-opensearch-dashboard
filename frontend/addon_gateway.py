@@ -95,7 +95,7 @@ class AddonGateway:
         entries = self.entries()
         if aid not in entries:
             return False
-        h = self.health(aid)                             # spec §9.5: label, refuse
+        h = self.health(aid)                             # label, refuse
         if h and h.get("contract_version") != 1:         # politely on version skew
             c = h.get("contract_version")
             self._warn(f"contract:{aid}",
@@ -124,7 +124,7 @@ class AddonGateway:
             cached = self._page_cache.get(aid)
             is_page = (not sub) and cached is not None
             if is_page:
-                # spec §3.3: briefly-down addon must not blank the framed page
+                # a briefly-down addon must not blank the framed page
                 body, key = cached[1], cached[0]
                 if self.tpl:
                     body = self.tpl(body.decode()).encode()
@@ -143,7 +143,7 @@ class AddonGateway:
         return True
 
     def legacy(self, path: str, query: str):
-        """Config-derived legacy routes (spec §4): first segment is a configured
+        """Config-derived legacy routes: first segment is a configured
         id ⇒ redirect into its mount; /api/<id> ⇒ mount + /api/<id>. Core routes
         are checked BEFORE this by Handler order, so no collision is possible."""
         entries = self.entries()

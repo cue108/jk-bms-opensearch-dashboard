@@ -1,5 +1,5 @@
-"""Owner ruling #10 (2026-10-26): WINDOW TO BACK-END TRUTH — every
-timer/target/boundary surface follows the hierarchy:
+"""WINDOW TO BACK-END TRUTH — every timer/target/boundary surface follows
+the hierarchy:
 
 (1) newest WRITE-CONFIRMED program generation (each ensure_on act with a
     time; superseded by the next write — last-wins, movement is truth),
@@ -149,7 +149,7 @@ def test_plan_marks_absence_leaves_rows_untouched():
     assert plan[0][3] == {}
 
 
-# --- fix round (review b8776ee): TRUE tier-1 dominance ------------------------
+# --- TRUE tier-1 dominance -----------------------------------------------------
 
 def test_tier_one_fire_wins_over_an_earlier_measured_step():
     """Probe case (review): measured first-positive M=08:02 sits STRICTLY
